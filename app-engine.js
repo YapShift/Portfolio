@@ -1,21 +1,49 @@
 /**
- * YapShift 引擎与全场景动态交互主模块 (app-engine.js v9.0)
- * 修复重点：
- *  1. 内置 404 死链 UID 自动替换为 100% 存活 UID（防止旧缓存或旧 assets.json 覆盖导致不出模型）
- *  2. 移除 DOMContentLoaded 异步死锁，脚本加载完毕第 0 秒立即启动 3D 视口渲染！
+ * YapShift 专属 3D 引擎与交互主模块 (app-engine.js v10.0)
+ * 彻底移除全部外部预设示例，仅保留 YapShift 指定的两个模型：
+ *  1. Suspention (08632550c5604444a14b53dc339b6589)
+ *  2. Stylized Rock LOD Preview - 5 Versions (f9963591aa36459b9837b7a9ca411438)
  */
 
-// 已知失效的旧 404 UID 自动映射表（防止你的旧配置文件或缓存导致加载失败）
-const DEAD_UID_HEALER = {
-  'eb022e8b473b49b19a21b91e840c5b6e': '63462c90432a47a4b120e127711284e1',
-  'b43c1a9f65284c20a79a0f12e39a8e7c': 'b89009525e024c389b2d3c0834d2a49b',
-  '84999d3e8e7a4ebbb0f7c234a9094196': 'd960c9a5e6e04200a581398412f9775e'
-};
-
-function sanitizeAssetUid(uid) {
-  const clean = (uid || '').trim();
-  return DEAD_UID_HEALER[clean] || clean || 'd5c58960ea5446008f1ebfe7d612f0fb';
-}
+// 强制覆盖任何残留旧缓存，确保只存在你发的这 2 个模型！
+const YAPSHIFT_EXCLUSIVE_ASSETS = [
+  {
+    id: 'yapshift-suspention',
+    title: '机械悬挂系统总成 (Suspention Assembly)',
+    category: 'MECHANICAL // HARD-SURFACE',
+    roleBadge: 'YapShift 原创：机械结构建模 + 装配配合',
+    uid: '08632550c5604444a14b53dc339b6589',
+    highlights: ['✦ 避震弹簧与摆臂精密配合', '✦ 360° 零漂移对称爆炸拆解', '✦ X-Ray 幽灵内腔透视'],
+    roles: [
+      { name: '硬表面机械结构', pct: 55, color: 'bg-orange-500', text: 'text-orange-400' },
+      { name: '组件拆分与拓扑', pct: 25, color: 'bg-sky-400', text: 'text-sky-400' },
+      { name: '金属PBR材质', pct: 20, color: 'bg-emerald-400', text: 'text-emerald-400' }
+    ],
+    workflow: [
+      { step: 'STEP 01', title: '悬挂组件 360° 零漂移爆炸拆解', tag: '炸开 65%', action: 'explode65', desc: '将避震器、螺旋弹簧、控制臂与轴承座沿中心对称向外推开，展示内部连接关系。' },
+      { step: 'STEP 02', title: 'X-Ray 幽灵半透明内腔透视', tag: '开启X-Ray', action: 'xray', desc: '将外部机械结构切换为 28% 半透明态，无需拆解即可直视内部活塞杆与轴套配合。' },
+      { step: 'STEP 03', title: '硬表面机械布线与一键复位', tag: '查看线框', action: 'wire', desc: '开启橙色拓扑线框检视弹簧与摆臂网格密度，或点击 0% 一键收合全部零件。' }
+    ]
+  },
+  {
+    id: 'yapshift-stylized-rock-lod',
+    title: '风格化岩石 5 级 LOD 预览 (Stylized Rock - 5 Versions)',
+    category: 'GAME OPTIMIZATION // 5-LEVEL LOD',
+    roleBadge: 'YapShift 原创：高模雕刻 + 5级LOD减面烘焙',
+    uid: 'f9963591aa36459b9837b7a9ca411438',
+    highlights: ['✦ 5 级 LOD 阶梯减面对比', '✦ 极低面数保持高模法线剪影', '✦ 风格化边缘磨损手绘质感'],
+    roles: [
+      { name: '造型雕刻与切面', pct: 40, color: 'bg-orange-500', text: 'text-orange-400' },
+      { name: '5级LOD拓扑减面', pct: 40, color: 'bg-sky-400', text: 'text-sky-400' },
+      { name: '法线烘焙与贴图', pct: 20, color: 'bg-emerald-400', text: 'text-emerald-400' }
+    ],
+    workflow: [
+      { step: 'STEP 01', title: '5 个版本 LOD 网格密度直观对比', tag: '开启线框对比', action: 'wire', desc: '一键叠加高亮线框，直观对比从高精版本到极简远景 LOD 版本的三角面递减功底！' },
+      { step: 'STEP 02', title: '风格化岩石块面切角雕塑检视', tag: '切换雕塑白模', action: 'clay', desc: '屏蔽颜色贴图，检验 5 个不同 LOD 版本在纯光影下的法线凹凸保持度与轮廓一致性。' },
+      { step: 'STEP 03', title: '无光影 Albedo 纯色手绘贴图检视', tag: '纯色贴图', action: 'albedo', desc: '剥离环境光与阴影，纯粹检视岩石边缘高光描绘与色彩冷暖变化。' }
+    ]
+  }
+];
 
 window.KineticBackground = {
   canvas: null, ctx: null, particles: [], meteors: [], mouse: { x: -1000, y: -1000 },
@@ -134,7 +162,6 @@ window.SketchfabEngine = class SketchfabEngine {
   loadModel(asset) {
     this.ready = false;
     this.stopOrbitLoop();
-    asset.uid = sanitizeAssetUid(asset.uid);
     Bus.emit('engine:loading', asset);
 
     const metaPromise = this.fetchRestMeta(asset.uid);
@@ -182,7 +209,9 @@ window.SketchfabEngine = class SketchfabEngine {
         });
       },
       error: () => {
-        Bus.emit('engine:log', `> WebGL Init Retry with Fallback UID...`);
+        // 如果 API 初始化异常，直接回退使用原生 Embed URL 确保 3D 视口必出模型
+        this.iframe.src = `https://sketchfab.com/models/${asset.uid}/embed?autostart=1&ui_theme=dark&transparent=1`;
+        document.getElementById('loading-overlay').classList.add('opacity-0', 'pointer-events-none');
       }
     });
   }
@@ -301,8 +330,9 @@ window.StudioUI = {
     this.initialized = true;
     this.engine = engine;
 
-    // 消毒所有资产中的旧 404 UID
-    PortfolioConfig.assets.forEach(a => { a.uid = sanitizeAssetUid(a.uid); });
+    // 强制只使用 YapShift 的 2 个专属模型，清除一切外部示例！
+    if (!window.PortfolioConfig) window.PortfolioConfig = {};
+    window.PortfolioConfig.assets = YAPSHIFT_EXCLUSIVE_ASSETS;
 
     KineticBackground.init();
     this.initHeroShowreel();
@@ -402,6 +432,7 @@ window.StudioUI = {
     if (!asset) return;
     this.currentAssetId = id;
     this.renderAssetCards();
+    document.getElementById('top-active-name').textContent = asset.title;
     document.getElementById('hud-model-title').textContent = asset.title;
     document.getElementById('panel-category').textContent = asset.category;
     document.getElementById('panel-role-badge').textContent = asset.roleBadge;
@@ -437,9 +468,11 @@ window.StudioUI = {
       document.getElementById('loading-overlay').classList.remove('opacity-0', 'pointer-events-none');
       ['spec-polys', 'spec-verts', 'spec-mats'].forEach(id => { const el = document.getElementById(id); el.textContent = 'SCANNING...'; el.className = 'text-xs font-bold text-slate-400 font-mono mt-0.5 telemetry-scanning'; });
     });
-    Bus.on('engine:ready', ({ asset, parts, strategy, polys, verts }) => {
+    Bus.on('engine:ready', ({ asset, parts, strategy, polys, verts, officialName }) => {
       document.getElementById('loading-overlay').classList.add('opacity-0', 'pointer-events-none');
-      asset.loadedPolys = polys; this.renderAssetCards();
+      asset.loadedPolys = polys;
+      if (asset.isCustom && officialName) asset.title = officialName;
+      this.renderAssetCards();
       ['spec-polys', 'spec-verts'].forEach(id => { document.getElementById(id).className = 'text-sm font-bold text-white font-mono mt-0.5'; });
       document.getElementById('spec-mats').className = 'text-sm font-bold text-emerald-300 font-mono mt-0.5';
       document.getElementById('spec-polys').textContent = polys.toLocaleString();
@@ -452,7 +485,7 @@ window.StudioUI = {
       document.getElementById('explode-slider').disabled = parts.length <= 1;
       const listEl = document.getElementById('subpart-inspector-list');
       if (parts.length <= 1) {
-        listEl.innerHTML = `<div class="p-2 rounded bg-amber-500/10 border border-amber-500/30 text-amber-200">⚠️ 单网格合并模型：内部仅有 1 个合并几何体，可使用 X-Ray 透视与光影旋转检视。</div>`;
+        listEl.innerHTML = `<div class="p-2 rounded bg-amber-500/10 border border-amber-500/30 text-amber-200">⚠️ 单网格合并模型：内部仅有 1 个合并几何体，可使用 ⌗ 拓扑线框、◐ 雕塑灰模与光影旋转检视。</div>`;
       } else {
         listEl.innerHTML = parts.map((p, idx) => `<div class="flex items-center justify-between px-2 py-1 rounded bg-[#131b2e]/90 border border-white/5"><span class="text-white truncate max-w-[175px]"><b class="text-orange-400 mr-1">#${idx + 1}</b>${p.name}</span><div class="flex gap-1"><button data-action="pulse-part" data-idx="${idx}" class="px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-300 text-[9px]">弹出</button><button data-action="vis-part" data-idx="${idx}" class="px-1.5 py-0.5 rounded bg-white/10 text-slate-200 text-[9px]">显隐</button></div></div>`).join('');
       }
@@ -504,10 +537,10 @@ window.StudioUI = {
         if (!raw) return;
         const match = raw.match(/[a-f0-9]{32}/i);
         const uid = match ? match[0] : raw.split('/').pop().split('-').pop();
-        const newId = 'custom-' + Date.now();
+        const newId = 'yapshift-' + Date.now();
         PortfolioConfig.assets.unshift({
-          id: newId, isCustom: true, title: document.getElementById('custom-model-title').value.trim() || 'YapShift 自定义 3D 资产',
-          category: 'YAPSHIFT // CUSTOM ASSET', roleBadge: 'YapShift 原创自研模型', uid,
+          id: newId, isCustom: true, title: document.getElementById('custom-model-title').value.trim() || 'YapShift 原创 3D 资产',
+          category: 'YAPSHIFT // ORIGINAL ASSET', roleBadge: 'YapShift 100% 原创资产', uid,
           highlights: ['✦ 递归穿透 Group 识别', '✦ 零漂移对称爆炸'],
           roles: [{ name: '结构建模', pct: 60, color: 'bg-orange-500', text: 'text-orange-400' }, { name: '材质渲染', pct: 40, color: 'bg-sky-400', text: 'text-sky-400' }],
           workflow: [{ step: 'STEP 01', title: '360° 零均值中心对称爆炸', tag: '炸开 65%', action: 'explode65', desc: '自动提取子部件向四周对称散开。' }]
@@ -523,7 +556,6 @@ window.StudioUI = {
   }
 };
 
-// 立即同步启动，不等待任何可能超时的异步网络请求！
 (function bootNow() {
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', () => StudioUI.init(new SketchfabEngine('sketchfab-viewport-frame')));
