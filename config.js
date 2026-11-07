@@ -1,17 +1,20 @@
-// config.js - 个人履历与 3D 资产配置表
+/**
+ * YapShift 专属作品集数据与配置层 (config.js)
+ * 以后新增或修改 Sketchfab 模型、个人经历，只需编辑此文件或 assets.json！
+ */
 window.PortfolioConfig = {
   author: {
-    name: 'TANG JIN JIANG',
-    role: '3D Modeler · Parametric CAD · Web 3D',
-    email: 'tang_jinjiang1@ge.rakyatdigital.gov.my',
+    name: 'YapShift',
+    tagline: '3D Hard-Surface Modeler · Parametric CAD · Technical Artist',
+    githubUrl: 'https://yapshift.github.io/Portfolio/',
     skills: [
-      { name: 'Blender / Hard-Surface', pct: 96, gradient: 'from-orange-500 to-amber-300', text: 'text-orange-400' },
-      { name: 'OpenSCAD 参数化机械建模', pct: 94, gradient: 'from-sky-500 to-cyan-300', text: 'text-sky-400' },
+      { name: 'Blender / Hard-Surface 建模', pct: 96, gradient: 'from-orange-500 to-amber-300', text: 'text-orange-400' },
+      { name: 'OpenSCAD 参数化机械工程', pct: 94, gradient: 'from-sky-500 to-cyan-300', text: 'text-sky-400' },
       { name: 'Substance 3D Painter / PBR', pct: 90, gradient: 'from-emerald-500 to-teal-300', text: 'text-emerald-400' },
-      { name: 'Sketchfab API / WebGL 前端架构', pct: 88, gradient: 'from-purple-500 to-pink-400', text: 'text-purple-400' }
+      { name: 'WebGL / Sketchfab API 解耦架构', pct: 88, gradient: 'from-purple-500 to-pink-400', text: 'text-purple-400' }
     ],
     milestones: [
-      { title: '🛠️ 模块化 3D 打印机挤出头总成', badge: '主设计师', tags: ['MGN12H 导轨适配', 'BMG 挤出机集成', 'OpenSCAD 全参数化'] },
+      { title: '🛠️ 模块化 3D 打印机挤出头总成', badge: 'YapShift 主导研发', tags: ['MGN12H 线性导轨适配', 'BMG 挤出机集成', 'OpenSCAD 全参数化'] },
       { title: '🤖 JK AI 智能教育交互系统', badge: '独立全栈开发', tags: ['SPM 知识图谱结构化', '双语实时转译', 'Web 交互前端'] }
     ]
   },
@@ -32,13 +35,12 @@ window.PortfolioConfig = {
     { id: 'cinema',  label: '🎬 电影胶片' }
   ],
 
-  // 👇 在这里把 uid 替换成你自己的 Sketchfab 32位模型 ID 即可！
   assets: [
     {
       id: 'mechanical-gearbox',
       title: '精密机械多部件总成 (Multi-Part Assy)',
       category: 'PARAMETRIC CAD // MULTI-PART',
-      roleBadge: '主导设计：参数化公差配合 + 独立零件拆解',
+      roleBadge: 'YapShift 主导：公差配合 + 独立拆解',
       uid: 'eb022e8b473b49b19a21b91e840c5b6e',
       highlights: ['✦ 递归穿透 Group 识别零件', '✦ X-Ray 幽灵透视内腔', '✦ 支持单零件点击抽离'],
       roles: [
@@ -56,7 +58,7 @@ window.PortfolioConfig = {
       id: 'sci-fi-drone',
       title: '反重力多装甲侦查无人机 (Sci-Fi Drone)',
       category: 'CONCEPT MECH // MULTI-MESH',
-      roleBadge: '负责：概念分件设计 + 发光核心管线',
+      roleBadge: 'YapShift 负责：分件设计 + 发光管线',
       uid: '84999d3e8e7a4ebbb0f7c234a9094196',
       highlights: ['✦ 多材质 Geometry 拆解', '✦ 电影级色差与暗角', '✦ Bloom 自发光核心'],
       roles: [
@@ -68,6 +70,42 @@ window.PortfolioConfig = {
         { step: 'STEP 01', title: '外甲与内核对称分离拆解', tag: '爆炸拆解', action: 'explode65', desc: '向外对称推开无人机外层装甲片，同时镜头自动拉远。' },
         { step: 'STEP 02', title: '开启夜航 Bloom + 电影后期', tag: '电影后期', action: 'cinema', desc: '激活 Bloom 辉光、光学色差与电影暗角。' },
         { step: 'STEP 03', title: '装甲蒙皮拓扑流向检视', tag: '拓扑线框', action: 'wire', desc: '查看曲面硬表面切分线与边缘卡线。' }
+      ]
+    },
+    {
+      id: 'retro-boombox',
+      title: '80年代复古手提音响 (Retro BoomBox)',
+      category: 'PROP ASSET // HIGH-DETAIL',
+      roleBadge: 'YapShift 制作：微观网罩 + 复古做旧',
+      uid: 'd5c58960ea5446008f1ebfe7d612f0fb',
+      highlights: ['✦ SSAO 缝隙立体阴影', '✦ 4K 纹理锐化滤镜', '✦ 生活化指纹磨损'],
+      roles: [
+        { name: '微观细节建模', pct: 40, color: 'bg-orange-500', text: 'text-orange-400' },
+        { name: '拉丝电镀材质', pct: 40, color: 'bg-sky-400', text: 'text-sky-400' },
+        { name: '烘焙与优化', pct: 20, color: 'bg-emerald-400', text: 'text-emerald-400' }
+      ],
+      workflow: [
+        { step: 'STEP 01', title: 'SSAO 环境光遮蔽 + 4K 锐化', tag: 'SSAO+锐化', action: 'ssaoSharpen', desc: '强化扬声器网罩孔洞的接触阴影与贴纸边缘锐度。' },
+        { step: 'STEP 02', title: '无光影 Albedo 纯色贴图检视', tag: '纯色贴图', action: 'albedo', desc: '剥离光影干扰，纯粹展示手绘基础颜色层。' },
+        { step: 'STEP 03', title: '拓扑线框与材质镜面测试', tag: '镜面反射', action: 'chrome', desc: '重写材质为镜面铬金，检验烘焙法线细节。' }
+      ]
+    },
+    {
+      id: 'damaged-helmet',
+      title: '科幻重装战损头盔 (Damaged Helmet)',
+      category: 'GAME ASSET // HARD SURFACE',
+      roleBadge: 'YapShift 负责：高模雕刻 + PBR 烘焙',
+      uid: 'b43c1a9f65284c20a79a0f12e39a8e7c',
+      highlights: ['✦ 四边面卡线倒角', '✦ 360° 光影旋转检视', '✦ 多层金属氧化战损'],
+      roles: [
+        { name: '硬表面建模', pct: 45, color: 'bg-orange-500', text: 'text-orange-400' },
+        { name: 'UV与法线烘焙', pct: 25, color: 'bg-sky-400', text: 'text-sky-400' },
+        { name: 'Substance贴图', pct: 30, color: 'bg-emerald-400', text: 'text-emerald-400' }
+      ],
+      workflow: [
+        { step: 'STEP 01', title: '中模硬表面造型检视', tag: '雕塑白模', action: 'clay', desc: '屏蔽贴图干扰，直接检视曲面造型与倒角高光连续性。' },
+        { step: 'STEP 02', title: '游戏级低模拓扑布线', tag: '拓扑线框', action: 'wire', desc: '开启橙色拓扑线框，查看 1.5 万面游戏级低模排布。' },
+        { step: 'STEP 03', title: '金属度与镜面反射测试', tag: '镜面铬金', action: 'chrome', desc: '配合底部【光影旋转】滑块检验高光流向。' }
       ]
     }
   ]
