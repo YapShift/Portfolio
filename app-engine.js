@@ -1,8 +1,9 @@
 /**
- * YapShift 专属 3D 引擎与交互主模块 (app-engine.js v11.0 Parallel Cache & Zero-Drift Edition)
+ * YapShift 专属 3D 引擎与交互主模块 (app-engine.js v12.0)
  * 核心升级：
- *  1. 多实例并行预加载与常驻显存池 (Multi-Iframe Parallel Pool)：启动时所有模型同时在后台并行初始化，切换模型 0 毫秒秒切，绝不重复加载！
- *  2. 视觉中心 100% 锁死爆炸算法：配合 scene-math.js v11.0 的父级矩阵逆变换 + 实时视线轴向平滑拉远，彻底解决爆炸时模型飞向一边及镜头偏离中心的问题。
+ *  1. 多实例并行预加载与常驻显存池 (Multi-Iframe Parallel Pool)：启动时所有模型同时在后台并行初始化，切换模型 0 毫秒秒切
+ *  2. 严格六向正交朝外爆炸 (上下左右前后) + 简易方框型 Hitbox (AABB) 防重叠解算，爆炸紧凑不飞散
+ *  3. 修复 Sketchfab setCameraLookAt(duration=0) 被当作 falsy 忽略的 Bug，实现丝滑同步的镜头随爆炸自动缩放 + 视觉中心 100% 锁定
  */
 
 const YAPSHIFT_EXCLUSIVE_ASSETS = [
@@ -12,14 +13,14 @@ const YAPSHIFT_EXCLUSIVE_ASSETS = [
     category: 'MECHANICAL // HARD-SURFACE',
     roleBadge: 'YapShift 原创：机械结构建模 + 装配配合',
     uid: '08632550c5604444a14b53dc339b6589',
-    highlights: ['✦ 避震弹簧与摆臂精密配合', '✦ 360° 零漂移对称爆炸拆解', '✦ X-Ray 幽灵内腔透视'],
+    highlights: ['✦ 避震弹簧与摆臂精密配合', '✦ 六向正交 + 方框Hitbox防重叠爆炸', '✦ X-Ray 幽灵内腔透视'],
     roles: [
       { name: '硬表面机械结构', pct: 55, color: 'bg-orange-500', text: 'text-orange-400' },
       { name: '组件拆分与拓扑', pct: 25, color: 'bg-sky-400', text: 'text-sky-400' },
       { name: '金属PBR材质', pct: 20, color: 'bg-emerald-400', text: 'text-emerald-400' }
     ],
     workflow: [
-      { step: 'STEP 01', title: '悬挂组件 360° 零漂移爆炸拆解', tag: '炸开 65%', action: 'explode65', desc: '将避震器、螺旋弹簧、控制臂与轴承座沿中心对称向外推开，展示内部连接关系。' },
+      { step: 'STEP 01', title: '悬挂组件六向正交防重叠爆炸', tag: '炸开 65%', action: 'explode65', desc: '严格限制沿上下左右前后 6 个正交方向朝外推开，并基于简易方框 Hitbox 自动避让重叠。' },
       { step: 'STEP 02', title: 'X-Ray 幽灵半透明内腔透视', tag: '开启X-Ray', action: 'xray', desc: '将外部机械结构切换为 28% 半透明态，无需拆解即可直视内部活塞杆与轴套配合。' },
       { step: 'STEP 03', title: '硬表面机械布线与一键复位', tag: '查看线框', action: 'wire', desc: '开启橙色拓扑线框检视弹簧与摆臂网格密度，或点击 0% 一键收合全部零件。' }
     ]
@@ -159,6 +160,7 @@ window.SketchfabEngine = class SketchfabEngine {
     this.pattern = 'radial';
     this.autoOrbitEnabled = true;
     this.orbitTimer = null;
+    this.toastTimer = null;
     this.startOrbitLoop();
   }
 
@@ -206,6 +208,23 @@ window.SketchfabEngine = class SketchfabEngine {
     assets.forEach(asset => this.ensureInstance(asset));
   }
 
+  syncCameraBaseline(ctx) {
+    if (!ctx || !ctx.ready || !ctx.api || ctx.programmaticCamMoving) return;
+    ctx.api.getCameraLookAt((err, cam) => {
+      if (err || !cam) return;
+      const factor = (parseFloat(ctx.explodeVal) || 0) / 100;
+      const currentZoomMult = 1 + factor * 0.45;
+      ctx.baselineCam = {
+        target: [cam.target[0], cam.target[1], cam.target[2]],
+        baseVec: [
+          (cam.position[0] - cam.target[0]) / currentZoomMult,
+          (cam.position[1] - cam.target[1]) / currentZoomMult,
+          (cam.position[2] - cam.target[2]) / currentZoomMult
+        ]
+      };
+    });
+  }
+
   ensureInstance(asset) {
     if (this.instances.has(asset.id)) {
       return this.instances.get(asset.id);
@@ -237,13 +256,14 @@ window.SketchfabEngine = class SketchfabEngine {
       polys: 0,
       verts: 0,
       officialName: null,
-      camScale: 1.2,
+      camScale: 0.85,
       baselineCam: null,
       explodeVal: 0,
       shaderMode: 'rendered',
       lightDeg: 0,
       postFx: { ssao: false, bloom: false, sharpen: false, cinema: false },
-      userInteracting: false
+      userInteracting: false,
+      programmaticCamMoving: false
     };
 
     this.instances.set(asset.id, ctx);
@@ -271,9 +291,14 @@ window.SketchfabEngine = class SketchfabEngine {
           ctx.loading = false;
           asset.isCachedReady = true;
 
-          api.addEventListener('camerastart', () => { ctx.userInteracting = true; });
+          api.addEventListener('camerastart', () => {
+            if (!ctx.programmaticCamMoving) ctx.userInteracting = true;
+          });
           api.addEventListener('cameraend', () => {
-            setTimeout(() => { ctx.userInteracting = false; }, 1500);
+            if (!ctx.programmaticCamMoving) {
+              this.syncCameraBaseline(ctx);
+            }
+            setTimeout(() => { ctx.userInteracting = false; }, 1200);
           });
 
           api.getCameraLookAt((err, cam) => {
@@ -282,9 +307,9 @@ window.SketchfabEngine = class SketchfabEngine {
               const vy = cam.position[1] - cam.target[1];
               const vz = cam.position[2] - cam.target[2];
               const dist = Math.hypot(vx, vy, vz);
-              ctx.camScale = dist > 0.01 ? dist * 0.22 : 1.2;
+              ctx.camScale = dist > 0.01 ? dist * 0.14 : 0.85;
               ctx.baselineCam = {
-                target: cam.target.slice(),
+                target: [cam.target[0], cam.target[1], cam.target[2]],
                 baseVec: [vx, vy, vz]
               };
             }
@@ -394,7 +419,7 @@ window.SketchfabEngine = class SketchfabEngine {
     return new Promise((resolve) => {
       ctx.api.getCameraLookAt((err, cam) => {
         if (!err && cam) {
-          const s = 1 + factor * 0.38;
+          const s = 1 + factor * 0.45;
           ctx.baselineCam = {
             target: [cam.target[0], cam.target[1], cam.target[2]],
             baseVec: [
@@ -409,7 +434,19 @@ window.SketchfabEngine = class SketchfabEngine {
     });
   }
 
-  explode(percent, adjustCam = true) {
+  showCamZoomToast() {
+    const toast = document.getElementById('cam-impulse-toast');
+    if (!toast) return;
+    toast.classList.remove('opacity-0');
+    toast.classList.add('opacity-100');
+    if (this.toastTimer) clearTimeout(this.toastTimer);
+    this.toastTimer = setTimeout(() => {
+      toast.classList.remove('opacity-100');
+      toast.classList.add('opacity-0');
+    }, 1600);
+  }
+
+  explode(percent, adjustCam = true, camDuration = 0.04) {
     const ctx = this.activeCtx;
     if (!ctx || !ctx.ready || !ctx.api) return;
     if (ctx.parts.length <= 1) {
@@ -430,22 +467,27 @@ window.SketchfabEngine = class SketchfabEngine {
           p.origPos[1] + localDelta[1] * factor,
           p.origPos[2] + localDelta[2] * factor
         ],
-        { duration: 0 }
+        { duration: 0.04 }
       );
     });
 
     if (adjustCam && ctx.baselineCam) {
-      const z = 1 + factor * 0.38;
+      const z = 1 + factor * 0.45;
       const t = ctx.baselineCam.target;
       const v = ctx.baselineCam.baseVec;
+      ctx.programmaticCamMoving = true;
       ctx.api.setCameraLookAt(
         [t[0] + v[0] * z, t[1] + v[1] * z, t[2] + v[2] * z],
         t,
-        0
+        camDuration,
+        () => {
+          setTimeout(() => { ctx.programmaticCamMoving = false; }, 60);
+        }
       );
+      this.showCamZoomToast();
     }
 
-    Bus.emit('engine:log', `> YapShift Zero-Drift Explode [${this.pattern.toUpperCase()}]: ${Math.round(ctx.explodeVal)}% (${ctx.parts.length} parts)`);
+    Bus.emit('engine:log', `> YapShift 6-Way Ortho + Hitbox Explode [${this.pattern.toUpperCase()}]: ${Math.round(ctx.explodeVal)}% (CamZoom: ${(1 + factor * 0.45).toFixed(2)}x)`);
   }
 
   setShading(mode) {
@@ -513,7 +555,7 @@ window.SketchfabEngine = class SketchfabEngine {
     const p = ctx && ctx.parts[idx];
     if (!ctx || !ctx.ready || !ctx.api || !p || !p.localRadialVec) return null;
     p.pulsed = !p.pulsed;
-    const factor = p.pulsed ? 0.75 : (ctx.explodeVal / 100);
+    const factor = p.pulsed ? 0.85 : (ctx.explodeVal / 100);
     ctx.api.translate(
       p.instanceID,
       [
@@ -521,7 +563,7 @@ window.SketchfabEngine = class SketchfabEngine {
         p.origPos[1] + p.localRadialVec[1] * factor,
         p.origPos[2] + p.localRadialVec[2] * factor
       ],
-      { duration: 0.25 }
+      { duration: 0.22 }
     );
     return p.pulsed;
   }
@@ -563,10 +605,10 @@ window.StudioUI = {
     this.bindGlobalEvents();
     this.bindBusListeners();
 
-    // 启动时立即在后台并行预加载所有模型！
-    this.engine.preloadAll(PortfolioConfig.assets);
+    const patRadialBtn = document.getElementById('btn-pat-radial');
+    if (patRadialBtn) patRadialBtn.textContent = '六向正交(Hitbox)';
 
-    // 激活第一个模型
+    this.engine.preloadAll(PortfolioConfig.assets);
     this.selectAsset(PortfolioConfig.assets[0].id);
   },
 
@@ -713,13 +755,13 @@ window.StudioUI = {
         update: () => {
           slider.value = obj.val;
           document.getElementById('explode-percent').textContent = Math.round(obj.val) + '%';
-          this.engine.explode(obj.val, true);
+          this.engine.explode(obj.val, true, 0.05);
         }
       });
     } else {
       slider.value = targetVal;
       document.getElementById('explode-percent').textContent = Math.round(targetVal) + '%';
-      this.engine.explode(targetVal, true);
+      this.engine.explode(targetVal, true, 0.35);
     }
   },
 
@@ -825,9 +867,9 @@ window.StudioUI = {
         const newAsset = {
           id: newId, isCustom: true, title: document.getElementById('custom-model-title').value.trim() || 'YapShift 原创 3D 资产',
           category: 'YAPSHIFT // ORIGINAL ASSET', roleBadge: 'YapShift 100% 原创资产', uid,
-          highlights: ['✦ 递归穿透 Group 识别', '✦ 零漂移对称爆炸'],
+          highlights: ['✦ 六向正交朝外爆炸', '✦ 简易方框 Hitbox 防重叠'],
           roles: [{ name: '结构建模', pct: 60, color: 'bg-orange-500', text: 'text-orange-400' }, { name: '材质渲染', pct: 40, color: 'bg-sky-400', text: 'text-sky-400' }],
-          workflow: [{ step: 'STEP 01', title: '360° 零均值中心对称爆炸', tag: '炸开 65%', action: 'explode65', desc: '自动提取子部件向四周对称散开。' }]
+          workflow: [{ step: 'STEP 01', title: '六向正交 + Hitbox 防重叠爆炸', tag: '炸开 65%', action: 'explode65', desc: '沿上下左右前后正交朝外拆解并自动避让方框重叠。' }]
         };
         PortfolioConfig.assets.unshift(newAsset);
         this.engine.ensureInstance(newAsset);
@@ -840,7 +882,7 @@ window.StudioUI = {
     expSlider.addEventListener('mousedown', () => this.engine.captureBaseline(expSlider.value));
     expSlider.addEventListener('input', (e) => {
       document.getElementById('explode-percent').textContent = Math.round(e.target.value) + '%';
-      this.engine.explode(e.target.value, true);
+      this.engine.explode(e.target.value, true, 0.04);
     });
     document.getElementById('light-rot-slider').addEventListener('input', (e) => {
       document.getElementById('light-rot-deg').textContent = e.target.value + '°';
