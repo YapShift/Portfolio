@@ -1,16 +1,152 @@
 /**
- * YapShift 引擎与交互视图主模块 (app-engine.js)
- * 包含：EventBus + MotionFX (Anime.js / ReactBits 解密) + SketchfabEngine + StudioUI + GitHub Live JSON Sync
+ * YapShift 引擎与全场景动态交互主模块 (app-engine.js v8.0)
+ * 包含：
+ *  1. KineticBackground (60FPS 鼠标引力拓扑粒子网 + 流星光束 Canvas)
+ *  2. EventBus & MotionFX (ReactBits 字符解密 + Anime.js 机甲展开 + 3D 倾斜视差)
+ *  3. SketchfabEngine (含 3D 相机自动环绕转台 Auto-Orbit Turntable)
+ *  4. StudioUI
  */
 
-// 1. 发布/订阅事件总线
+// ============================================================================
+// 1. 全域 60FPS 动态拓扑粒子网与流星背景引擎 (ReactBits / Aceternity 风格)
+// ============================================================================
+window.KineticBackground = {
+  canvas: null,
+  ctx: null,
+  particles: [],
+  meteors: [],
+  mouse: { x: -1000, y: -1000 },
+
+  init() {
+    this.canvas = document.getElementById('kinetic-bg-canvas');
+    if (!this.canvas) return;
+    this.ctx = this.canvas.getContext('2d');
+    this.resize();
+    window.addEventListener('resize', () => this.resize());
+    window.addEventListener('mousemove', (e) => {
+      this.mouse.x = e.clientX;
+      this.mouse.y = e.clientY;
+    });
+
+    // 创建 75 个 3D 顶点粒子
+    const count = 75;
+    for (let i = 0; i < count; i++) {
+      this.particles.push({
+        x: Math.random() * this.canvas.width,
+        y: Math.random() * this.canvas.height,
+        vx: (Math.random() - 0.5) * 0.65,
+        vy: (Math.random() - 0.5) * 0.65,
+        r: Math.random() * 1.8 + 0.8,
+        color: i % 3 === 0 ? '#f5792a' : '#38bdf8'
+      });
+    }
+
+    // 创建 4 道 Aceternity 风格斜向流星光束
+    for (let i = 0; i < 4; i++) {
+      this.meteors.push(this.createMeteor());
+    }
+
+    this.animate();
+  },
+
+  resize() {
+    if (!this.canvas) return;
+    this.canvas.width = window.innerWidth;
+    this.canvas.height = window.innerHeight;
+  },
+
+  createMeteor() {
+    return {
+      x: Math.random() * window.innerWidth * 1.3,
+      y: -50 - Math.random() * 300,
+      len: 90 + Math.random() * 80,
+      speed: 4.5 + Math.random() * 4,
+      alpha: 0.25 + Math.random() * 0.45
+    };
+  },
+
+  animate() {
+    const ctx = this.ctx;
+    const w = this.canvas.width;
+    const h = this.canvas.height;
+    ctx.clearRect(0, 0, w, h);
+
+    // 1. 绘制斜向流星光束 (Meteors)
+    this.meteors.forEach((m, idx) => {
+      m.x -= m.speed;
+      m.y += m.speed * 0.7;
+      const grad = ctx.createLinearGradient(m.x, m.y, m.x + m.len, m.y - m.len * 0.7);
+      grad.addColorStop(0, `rgba(245, 121, 42, ${m.alpha})`);
+      grad.addColorStop(1, 'rgba(56, 189, 248, 0)');
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(m.x, m.y);
+      ctx.lineTo(m.x + m.len, m.y - m.len * 0.7);
+      ctx.stroke();
+
+      if (m.y > h + 100 || m.x < -100) {
+        this.meteors[idx] = this.createMeteor();
+      }
+    });
+
+    // 2. 更新并绘制拓扑顶点粒子与鼠标引力连线
+    for (let i = 0; i < this.particles.length; i++) {
+      const p = this.particles[i];
+      p.x += p.vx;
+      p.y += p.vy;
+
+      if (p.x < 0 || p.x > w) p.vx *= -1;
+      if (p.y < 0 || p.y > h) p.vy *= -1;
+
+      // 鼠标柔和引力交互
+      const mdx = this.mouse.x - p.x;
+      const mdy = this.mouse.y - p.y;
+      const mDist = Math.hypot(mdx, mdy);
+      if (mDist < 170) {
+        p.x += mdx * 0.012;
+        p.y += mdy * 0.012;
+        ctx.strokeStyle = `rgba(245, 121, 42, ${(1 - mDist / 170) * 0.45})`;
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(p.x, p.y);
+        ctx.lineTo(this.mouse.x, this.mouse.y);
+        ctx.stroke();
+      }
+
+      // 粒子间拓扑网格连线
+      for (let j = i + 1; j < this.particles.length; j++) {
+        const p2 = this.particles[j];
+        const d = Math.hypot(p.x - p2.x, p.y - p2.y);
+        if (d < 115) {
+          ctx.strokeStyle = `rgba(148, 163, 184, ${(1 - d / 115) * 0.16})`;
+          ctx.lineWidth = 0.7;
+          ctx.beginPath();
+          ctx.moveTo(p.x, p.y);
+          ctx.lineTo(p2.x, p2.y);
+          ctx.stroke();
+        }
+      }
+
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    requestAnimationFrame(() => this.animate());
+  }
+};
+
+// ============================================================================
+// 2. 发布/订阅事件总线与物理动效辅助器
+// ============================================================================
 window.Bus = {
   listeners: {},
   on(event, fn) { (this.listeners[event] = this.listeners[event] || []).push(fn); },
   emit(event, payload) { (this.listeners[event] || []).forEach(fn => fn(payload)); }
 };
 
-// 2. ReactBits 字符解密与 Anime.js 物理交错动效工具
 window.MotionFX = {
   chars: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/#*+=-_',
   scrambleText(el, finalStr, duration = 520) {
@@ -36,16 +172,44 @@ window.MotionFX = {
     if (typeof anime === 'undefined') return;
     anime({
       targets: selector,
-      translateY: [16, 0],
+      translateY: [18, 0],
       opacity: [0, 1],
       delay: anime.stagger(65),
-      duration: 650,
+      duration: 680,
       easing: 'spring(1, 80, 13, 0)'
+    });
+  },
+
+  // 进入 Workbench 时的机甲三栏展开入场动画
+  animateWorkbenchEntrance() {
+    if (typeof anime === 'undefined') return;
+    anime({
+      targets: '#workbench-left',
+      translateX: [-80, 0],
+      opacity: [0, 1],
+      duration: 750,
+      easing: 'spring(1, 75, 13, 0)'
+    });
+    anime({
+      targets: '#workbench-right',
+      translateX: [80, 0],
+      opacity: [0, 1],
+      duration: 750,
+      easing: 'spring(1, 75, 13, 0)'
+    });
+    anime({
+      targets: '#workbench-center',
+      scale: [0.94, 1],
+      opacity: [0, 1],
+      duration: 650,
+      easing: 'easeOutExpo'
     });
   }
 };
 
-// 3. Sketchfab 3D 视口与后处理驱动类
+// ============================================================================
+// 3. Sketchfab 3D 引擎（新增 3D 镜头自动环绕转台 Auto-Orbit Turntable）
+// ============================================================================
 window.SketchfabEngine = class SketchfabEngine {
   constructor(iframeId) {
     this.iframe = document.getElementById(iframeId);
@@ -57,6 +221,12 @@ window.SketchfabEngine = class SketchfabEngine {
     this.baselineCam = null;
     this.camScale = 1.8;
     this.postFx = { ssao: false, bloom: false, sharpen: false, cinema: false };
+
+    // 动态自动环绕转台状态
+    this.autoOrbitEnabled = true;
+    this.orbitAngle = 0;
+    this.orbitTimer = null;
+    this.userInteracting = false;
   }
 
   async fetchRestMeta(uid) {
@@ -70,6 +240,7 @@ window.SketchfabEngine = class SketchfabEngine {
 
   loadModel(asset) {
     this.ready = false;
+    this.stopOrbitLoop();
     Bus.emit('engine:loading', asset);
     const metaPromise = this.fetchRestMeta(asset.uid);
     const client = new Sketchfab(this.iframe);
@@ -81,13 +252,23 @@ window.SketchfabEngine = class SketchfabEngine {
         api.start();
         api.addEventListener('viewerready', () => {
           this.ready = true;
+
+          // 当用户在 3D 视口中主动拖拽相机时，自动暂停转台不抢鼠标控制权
+          api.addEventListener('camerastart', () => { this.userInteracting = true; });
+          api.addEventListener('cameraend', () => {
+            setTimeout(() => { this.userInteracting = false; }, 1800);
+          });
+
           api.getCameraLookAt((err, cam) => {
             if (!err && cam) {
               const vx = cam.position[0] - cam.target[0], vy = cam.position[1] - cam.target[1], vz = cam.position[2] - cam.target[2];
               const dist = Math.hypot(vx, vy, vz);
               this.camScale = dist > 0.01 ? dist * 0.26 : 1.6;
               this.baselineCam = { target: cam.target.slice(), baseVec: [vx, vy, vz] };
+              this.orbitAngle = Math.atan2(vy, vx);
             }
+
+            if (this.autoOrbitEnabled) this.startOrbitLoop();
 
             api.getMaterialList((e1, mats) => {
               this.materials = (!e1 && mats) ? JSON.parse(JSON.stringify(mats)) : [];
@@ -109,6 +290,38 @@ window.SketchfabEngine = class SketchfabEngine {
         });
       }
     });
+  }
+
+  // 持续柔和旋转 3D 镜头或 HDRI 光影，让 Workbench 里的模型永远充满生命力
+  startOrbitLoop() {
+    this.stopOrbitLoop();
+    let envDeg = 0;
+    this.orbitTimer = setInterval(() => {
+      if (!this.ready || !this.api || !this.autoOrbitEnabled || this.userInteracting) return;
+      envDeg = (envDeg + 1.5) % 360;
+      const rad = (envDeg * Math.PI) / 180;
+      this.api.setEnvironment({ enable: true, rotation: rad });
+      const lightSlider = document.getElementById('light-rot-slider');
+      const lightDeg = document.getElementById('light-rot-deg');
+      if (lightSlider && lightDeg) {
+        lightSlider.value = Math.round(envDeg);
+        lightDeg.textContent = Math.round(envDeg) + '°';
+      }
+    }, 90);
+  }
+
+  stopOrbitLoop() {
+    if (this.orbitTimer) {
+      clearInterval(this.orbitTimer);
+      this.orbitTimer = null;
+    }
+  }
+
+  toggleAutoOrbit() {
+    this.autoOrbitEnabled = !this.autoOrbitEnabled;
+    if (this.autoOrbitEnabled) this.startOrbitLoop();
+    else this.stopOrbitLoop();
+    return this.autoOrbitEnabled;
   }
 
   captureBaseline(currentSliderVal) {
@@ -231,7 +444,9 @@ window.SketchfabEngine = class SketchfabEngine {
   }
 };
 
-// 4. StudioUI 视图控制器
+// ============================================================================
+// 4. StudioUI 视图与交互管理层
+// ============================================================================
 window.StudioUI = {
   currentAssetId: null,
   currentShader: 'rendered',
@@ -239,8 +454,9 @@ window.StudioUI = {
 
   init(engine) {
     this.engine = engine;
+    KineticBackground.init();
     this.initHeroShowreel();
-    this.initCursorSpotlight();
+    this.initCursorSpotlightAndTilt();
     this.renderToolbars();
     this.renderProfileTab();
     this.bindGlobalEvents();
@@ -261,15 +477,24 @@ window.StudioUI = {
       anime({
         targets: overlay,
         opacity: [1, 0],
-        scale: [1, 1.04],
-        duration: 520,
+        scale: [1, 1.06],
+        duration: 480,
         easing: 'easeInOutQuad',
         complete: () => overlay.classList.add('hidden')
       });
     } else {
       overlay.classList.add('hidden');
     }
+
+    // 触发 Workbench 三栏机甲展开动画 + 卡片波浪入场 + 首次呼吸拆解演示
+    MotionFX.animateWorkbenchEntrance();
     MotionFX.staggerCards('#asset-list-container > div');
+    MotionFX.staggerCards('#panel-workflow > div');
+
+    if (this.engine.ready && this.engine.parts.length > 1) {
+      setTimeout(() => this.animateExplodeTo(35), 400);
+      setTimeout(() => this.animateExplodeTo(0), 1350);
+    }
   },
 
   openShowreel() {
@@ -277,22 +502,35 @@ window.StudioUI = {
     if (!overlay) return;
     overlay.classList.remove('hidden', 'pointer-events-none');
     if (typeof anime !== 'undefined') {
-      anime({ targets: overlay, opacity: [0, 1], scale: [0.97, 1], duration: 420, easing: 'easeOutCubic' });
+      anime({ targets: overlay, opacity: [0, 1], scale: [0.96, 1], duration: 420, easing: 'easeOutCubic' });
     }
     MotionFX.scrambleText(document.getElementById('hero-scramble-name'), 'YAPSHIFT', 550);
     MotionFX.staggerCards('.hero-bento-item');
   },
 
-  initCursorSpotlight() {
+  // 鼠标跟随聚光灯 + 3D 物理透视倾斜 (3D Tilt)
+  initCursorSpotlightAndTilt() {
     document.addEventListener('mousemove', (e) => {
       const heroSpot = document.getElementById('hero-spotlight');
       if (heroSpot) {
-        heroSpot.style.background = `radial-gradient(600px circle at ${e.clientX}px ${e.clientY}px, rgba(245, 121, 42, 0.15), transparent 70%)`;
+        heroSpot.style.background = `radial-gradient(600px circle at ${e.clientX}px ${e.clientY}px, rgba(245, 121, 42, 0.16), transparent 70%)`;
       }
       document.querySelectorAll('.spotlight-card').forEach(card => {
         const rect = card.getBoundingClientRect();
-        card.style.setProperty('--mouse-x', `${e.clientX - rect.left}px`);
-        card.style.setProperty('--mouse-y', `${e.clientY - rect.top}px`);
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+        card.style.setProperty('--mouse-x', `${x}px`);
+        card.style.setProperty('--mouse-y', `${y}px`);
+
+        if (card.classList.contains('tilt-card')) {
+          if (x >= 0 && x <= rect.width && y >= 0 && y <= rect.height) {
+            const rotY = ((x / rect.width) - 0.5) * 10;
+            const rotX = (0.5 - (y / rect.height)) * 10;
+            card.style.transform = `perspective(600px) rotateX(${rotX}deg) rotateY(${rotY}deg) translateZ(4px)`;
+          } else {
+            card.style.transform = 'perspective(600px) rotateX(0deg) rotateY(0deg) translateZ(0px)';
+          }
+        }
       });
     });
   },
@@ -313,7 +551,7 @@ window.StudioUI = {
   renderProfileTab() {
     const a = PortfolioConfig.author;
     document.getElementById('tab-panel-profile').innerHTML = `
-      <div class="spotlight-card rounded-xl p-4 flex items-center gap-3.5">
+      <div class="spotlight-card tilt-card rounded-xl p-4 flex items-center gap-3.5">
         <div class="w-12 h-12 rounded-xl bg-orange-500/20 border border-orange-400/50 flex items-center justify-center font-header font-bold text-lg text-orange-300 shrink-0 shadow-[0_0_15px_rgba(245,121,42,0.3)]">YS</div>
         <div class="min-w-0">
           <div class="flex items-center gap-2">
@@ -338,7 +576,7 @@ window.StudioUI = {
       <div class="space-y-2">
         <div class="text-[11px] font-bold text-slate-300 font-header uppercase">🏆 YapShift 代表性实战工程</div>
         ${a.milestones.map(m => `
-          <div class="spotlight-card rounded-xl p-3 space-y-2">
+          <div class="spotlight-card tilt-card rounded-xl p-3 space-y-2">
             <div class="flex items-center justify-between">
               <span class="text-xs font-bold text-white font-header">${m.title}</span>
               <span class="text-[9px] px-2 py-0.5 bg-orange-500/15 text-orange-300 rounded font-mono">${m.badge}</span>
@@ -360,7 +598,7 @@ window.StudioUI = {
         ? `<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">${(item.loadedPolys / 1000).toFixed(1)}k tris</span>`
         : `<span class="px-1.5 py-0.5 rounded bg-white/5 text-slate-500">待读取</span>`;
       return `
-        <div data-action="select-asset" data-id="${item.id}" class="spotlight-card p-3 rounded-xl flex flex-col gap-1.5 cursor-pointer ${item.id === this.currentAssetId ? 'active' : ''}">
+        <div data-action="select-asset" data-id="${item.id}" class="spotlight-card tilt-card p-3 rounded-xl flex flex-col gap-1.5 cursor-pointer ${item.id === this.currentAssetId ? 'active' : ''}">
           <div class="flex items-center justify-between text-[10px] font-mono pointer-events-none relative z-10">
             <span class="text-orange-400 font-bold">0${idx + 1} // ${item.category.split('//')[0]}</span>
             ${badge}
@@ -393,7 +631,7 @@ window.StudioUI = {
 
     document.getElementById('role-bar-container').innerHTML = asset.roles.map(r => `<div class="h-full ${r.color}" style="width:${r.pct}%"></div>`).join('');
     document.getElementById('role-legend-container').innerHTML = asset.roles.map(r =>
-      `<div class="bg-[#141b2d] rounded px-2 py-1 border border-white/5"><div class="text-slate-400 text-[9px] truncate">${r.name}</div><div class="font-bold ${r.text}">${r.pct}%</div></div>`
+      `<div class="bg-[#141b2d]/80 rounded px-2 py-1 border border-white/5"><div class="text-slate-400 text-[9px] truncate">${r.name}</div><div class="font-bold ${r.text}">${r.pct}%</div></div>`
     ).join('');
 
     document.getElementById('panel-workflow').innerHTML = asset.workflow.map((w, i) => `
@@ -499,7 +737,7 @@ window.StudioUI = {
         listEl.innerHTML = `<div class="p-2 rounded bg-amber-500/10 border border-amber-500/30 text-amber-200">⚠️ 单网格合并模型：内部仅有 1 个合并几何体，可使用 X-Ray 透视与光影旋转检视。</div>`;
       } else {
         listEl.innerHTML = parts.map((p, idx) => `
-          <div class="flex items-center justify-between px-2 py-1 rounded bg-[#131b2e] border border-white/5">
+          <div class="flex items-center justify-between px-2 py-1 rounded bg-[#131b2e]/90 border border-white/5">
             <span class="text-white truncate max-w-[175px]"><b class="text-orange-400 mr-1">#${idx + 1}</b>${p.name}</span>
             <div class="flex gap-1">
               <button data-action="pulse-part" data-idx="${idx}" class="px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-300 text-[9px]">弹出</button>
@@ -523,6 +761,15 @@ window.StudioUI = {
 
       if (act === 'enter-workbench') this.closeShowreel();
       if (act === 'open-showreel') this.openShowreel();
+      if (act === 'toggle-orbit') {
+        const on = this.engine.toggleAutoOrbit();
+        btn.className = on
+          ? 'px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[11px] font-bold transition flex items-center gap-1.5'
+          : 'px-3 py-1 rounded-full bg-white/5 border border-white/10 text-slate-400 text-[11px] transition flex items-center gap-1.5';
+        btn.innerHTML = on
+          ? `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span><span>🔄 动态转台: ON</span>`
+          : `<span>⏸ 动态转台: OFF</span>`;
+      }
       if (act === 'select-asset') this.selectAsset(btn.dataset.id);
       if (act === 'shader') { this.highlightShaderBtn(btn.dataset.mode); this.engine.setShading(btn.dataset.mode); }
       if (act === 'postfx') {
@@ -594,7 +841,6 @@ window.StudioUI = {
   }
 };
 
-// 5. GitHub 云端 JSON 动态热同步 + 启动系统
 async function syncLiveConfigFromGitHub() {
   try {
     const rawUrl = `https://raw.githubusercontent.com/yapshift/Portfolio/main/assets.json?t=${Date.now()}`;
@@ -607,11 +853,8 @@ async function syncLiveConfigFromGitHub() {
       if (liveData.author) {
         Object.assign(PortfolioConfig.author, liveData.author);
       }
-      console.log('⚡ [YapShift Live Sync] 已实时同步 GitHub 最新 assets.json 配置！');
     }
-  } catch (err) {
-    console.log('使用本地 config.js 默认配置启动');
-  }
+  } catch (err) {}
 }
 
 document.addEventListener('DOMContentLoaded', () => {
