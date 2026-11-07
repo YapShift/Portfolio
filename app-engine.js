@@ -1,5 +1,5 @@
 /**
- * YapShift 专属 3D 引擎与交互主模块 (app-engine.js v10.0)
+ * YapShift 专属 3D 引擎与交互主模块 (app-engine.js v10.1 Fixed)
  * 彻底移除全部外部预设示例，仅保留 YapShift 指定的两个模型：
  *  1. Suspention (08632550c5604444a14b53dc339b6589)
  *  2. Stylized Rock LOD Preview - 5 Versions (f9963591aa36459b9837b7a9ca411438)
@@ -143,11 +143,13 @@ window.MotionFX = {
 
 window.SketchfabEngine = class SketchfabEngine {
   constructor(iframeId) {
+    this.iframeId = iframeId;
     this.iframe = document.getElementById(iframeId);
     this.api = null; this.ready = false; this.parts = []; this.materials = [];
     this.pattern = 'radial'; this.baselineCam = null; this.camScale = 1.8;
     this.postFx = { ssao: false, bloom: false, sharpen: false, cinema: false };
     this.autoOrbitEnabled = true; this.orbitTimer = null; this.userInteracting = false;
+    this.loadToken = 0;
   }
 
   async fetchRestMeta(uid) {
@@ -159,25 +161,52 @@ window.SketchfabEngine = class SketchfabEngine {
     } catch { return {}; }
   }
 
+  // 每次切换模型时重建干净的 iframe 节点，避免旧 Sketchfab 实例事件冲突
+  resetIframeElement() {
+    const oldFrame = document.getElementById(this.iframeId);
+    if (!oldFrame || !oldFrame.parentNode) return this.iframe;
+    const newFrame = oldFrame.cloneNode(false);
+    newFrame.src = 'about:blank';
+    oldFrame.parentNode.replaceChild(newFrame, oldFrame);
+    this.iframe = newFrame;
+    return newFrame;
+  }
+
   loadModel(asset) {
     this.ready = false;
+    this.api = null;
+    this.parts = [];
+    this.materials = [];
     this.stopOrbitLoop();
+    const currentToken = ++this.loadToken;
+
     Bus.emit('engine:loading', asset);
+    Bus.emit('engine:log', `> Initializing Sketchfab WebGL API for UID: ${asset.uid}...`);
 
     const metaPromise = this.fetchRestMeta(asset.uid);
-    const client = new Sketchfab(this.iframe);
+    const targetIframe = this.resetIframeElement();
+
+    if (typeof Sketchfab === 'undefined') {
+      console.error('Sketchfab Viewer API script not loaded!');
+      return;
+    }
+
+    const client = new Sketchfab('1.12.1', targetIframe);
 
     client.init(asset.uid, {
       autostart: 1,
+      preload: 1,
       ui_theme: 'dark',
       ui_infos: 0,
       ui_controls: 1,
       ui_watermark: 0,
       transparent: 1,
       success: (api) => {
+        if (currentToken !== this.loadToken) return;
         this.api = api;
         api.start();
         api.addEventListener('viewerready', () => {
+          if (currentToken !== this.loadToken) return;
           this.ready = true;
           api.addEventListener('camerastart', () => { this.userInteracting = true; });
           api.addEventListener('cameraend', () => { setTimeout(() => { this.userInteracting = false; }, 1800); });
@@ -194,6 +223,7 @@ window.SketchfabEngine = class SketchfabEngine {
             api.getMaterialList((e1, mats) => {
               this.materials = (!e1 && mats) ? JSON.parse(JSON.stringify(mats)) : [];
               api.getNodeMap(async (e2, nodeMap) => {
+                if (currentToken !== this.loadToken) return;
                 const result = SceneGraphMath.analyzeAndBuildVectors(e2 ? null : nodeMap, this.camScale);
                 this.parts = result.parts;
                 const meta = await metaPromise;
@@ -203,15 +233,18 @@ window.SketchfabEngine = class SketchfabEngine {
                   verts: meta.vertexCount || Math.round((meta.faceCount || 18000) * 0.58),
                   officialName: meta.officialName
                 });
+                Bus.emit('engine:log', `> Model Ready: ${asset.title} (${this.parts.length} parts, ${this.materials.length} mats)`);
               });
             });
           });
         });
       },
       error: () => {
-        // 如果 API 初始化异常，直接回退使用原生 Embed URL 确保 3D 视口必出模型
+        if (currentToken !== this.loadToken) return;
         this.iframe.src = `https://sketchfab.com/models/${asset.uid}/embed?autostart=1&ui_theme=dark&transparent=1`;
-        document.getElementById('loading-overlay').classList.add('opacity-0', 'pointer-events-none');
+        const loadingEl = document.getElementById('loading-overlay');
+        if (loadingEl) loadingEl.classList.add('opacity-0', 'pointer-events-none');
+        Bus.emit('engine:log', `> [WARN] Sketchfab API Fallback Mode Activated.`);
       }
     });
   }
@@ -242,7 +275,14 @@ window.SketchfabEngine = class SketchfabEngine {
   }
 
   explode(percent, adjustCam = true) {
-    if (!this.ready || !this.api || this.parts.length <= 1) return;
+    if (!this.ready || !this.api) {
+      Bus.emit('engine:log', `> [WAIT] 模型仍在初始化中，请稍候...`);
+      return;
+    }
+    if (this.parts.length <= 1) {
+      Bus.emit('engine:log', `> [INFO] 当前模型为单网格合并资产 (1 Mesh)，不支持子件拆解，请使用线框或灰模检视。`);
+      return;
+    }
     const factor = (parseFloat(percent) || 0) / 100;
     this.parts.forEach(p => {
       const vec = this.pattern === 'axial' ? p.axialDir : p.radialDir, dist = factor * p.maxDistance;
@@ -256,7 +296,10 @@ window.SketchfabEngine = class SketchfabEngine {
   }
 
   setShading(mode) {
-    if (!this.ready || !this.api) return;
+    if (!this.ready || !this.api) {
+      Bus.emit('engine:log', `> [WAIT] 模型仍在加载中，请等待加载完成后切换材质模式。`);
+      return;
+    }
     if (mode === 'wire') { this.api.setShadingStyle('lit'); this.api.setWireframe(true, { color: 'F5792AFF' }); Bus.emit('engine:log', `> Wireframe Topology Overlay Enabled`); return; }
     this.api.setWireframe(false);
     if (mode === 'clay')   { this.api.setShadingStyle('matcap');    Bus.emit('engine:log', `> Matcap Clay Shading Enabled`); return; }
@@ -432,7 +475,10 @@ window.StudioUI = {
     if (!asset) return;
     this.currentAssetId = id;
     this.renderAssetCards();
-    document.getElementById('top-active-name').textContent = asset.title;
+
+    const topNameEl = document.getElementById('top-active-name');
+    if (topNameEl) topNameEl.textContent = asset.title;
+
     document.getElementById('hud-model-title').textContent = asset.title;
     document.getElementById('panel-category').textContent = asset.category;
     document.getElementById('panel-role-badge').textContent = asset.roleBadge;
@@ -441,8 +487,14 @@ window.StudioUI = {
     document.getElementById('role-bar-container').innerHTML = asset.roles.map(r => `<div class="h-full ${r.color}" style="width:${r.pct}%"></div>`).join('');
     document.getElementById('role-legend-container').innerHTML = asset.roles.map(r => `<div class="bg-[#141b2d]/80 rounded px-2 py-1 border border-white/5"><div class="text-slate-400 text-[9px] truncate">${r.name}</div><div class="font-bold ${r.text}">${r.pct}%</div></div>`).join('');
     document.getElementById('panel-workflow').innerHTML = asset.workflow.map((w, i) => `<div data-action="workflow-step" data-wf="${w.action}" data-idx="${i}" class="pipeline-node spotlight-card rounded-xl p-2.5 flex flex-col gap-1"><div class="flex items-center justify-between pointer-events-none relative z-10"><span class="text-xs font-bold text-white font-header"><b class="text-orange-300 font-mono mr-1">${w.step}</b>${w.title}</span><span class="text-[9px] font-mono px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300">${w.tag} ➔</span></div><div class="text-[10px] text-slate-400 pointer-events-none relative z-10">${w.desc}</div></div>`).join('');
+
     document.getElementById('explode-slider').value = 0;
     document.getElementById('explode-percent').textContent = '0%';
+    this.engine.postFx = { ssao: false, bloom: false, sharpen: false, cinema: false };
+    PortfolioConfig.postFX.forEach(f => {
+      const fxBtn = document.getElementById('btn-fx-' + f.id);
+      if (fxBtn) fxBtn.className = 'px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-slate-300 text-[10px] font-mono transition';
+    });
     this.highlightShaderBtn('rendered');
     this.engine.loadModel(asset);
   },
@@ -466,6 +518,7 @@ window.StudioUI = {
   bindBusListeners() {
     Bus.on('engine:loading', () => {
       document.getElementById('loading-overlay').classList.remove('opacity-0', 'pointer-events-none');
+      document.getElementById('telemetry-status-tag').textContent = 'CONNECTING SKETCHFAB API...';
       ['spec-polys', 'spec-verts', 'spec-mats'].forEach(id => { const el = document.getElementById(id); el.textContent = 'SCANNING...'; el.className = 'text-xs font-bold text-slate-400 font-mono mt-0.5 telemetry-scanning'; });
     });
     Bus.on('engine:ready', ({ asset, parts, strategy, polys, verts, officialName }) => {
@@ -512,12 +565,17 @@ window.StudioUI = {
       }
       if (act === 'explode-pattern') {
         this.engine.pattern = btn.dataset.pattern;
+        const isRadial = this.engine.pattern === 'radial';
+        document.getElementById('btn-pat-radial').className = isRadial ? 'px-2 py-0.5 rounded bg-orange-500/30 text-orange-200 font-bold' : 'px-2 py-0.5 rounded text-slate-400';
+        document.getElementById('btn-pat-axial').className = !isRadial ? 'px-2 py-0.5 rounded bg-orange-500/30 text-orange-200 font-bold' : 'px-2 py-0.5 rounded text-slate-400';
         this.engine.explode(document.getElementById('explode-slider').value, false);
       }
       if (act === 'explode-to') this.animateExplodeTo(parseFloat(btn.dataset.val));
       if (act === 'pulse-part') { const pulsed = this.engine.pulsePart(parseInt(btn.dataset.idx, 10)); if (pulsed !== null) btn.textContent = pulsed ? '收回' : '弹出'; }
       if (act === 'vis-part') { const vis = this.engine.togglePartVis(parseInt(btn.dataset.idx, 10)); if (vis !== null) btn.textContent = vis ? '显隐' : '已隐'; }
       if (act === 'workflow-step') {
+        document.querySelectorAll('.pipeline-node').forEach(n => n.classList.remove('active-step'));
+        btn.classList.add('active-step');
         const wf = btn.dataset.wf;
         if (['clay', 'wire', 'chrome', 'rendered', 'xray', 'albedo'].includes(wf)) { this.highlightShaderBtn(wf); this.engine.setShading(wf); }
         else if (wf === 'explode65') this.animateExplodeTo(65);
@@ -529,6 +587,12 @@ window.StudioUI = {
         const isProf = btn.dataset.tab === 'profile';
         document.getElementById('tab-panel-profile').classList.toggle('hidden', !isProf);
         document.getElementById('tab-panel-model').classList.toggle('hidden', isProf);
+        const btnModel = document.getElementById('tab-btn-model');
+        const btnProf = document.getElementById('tab-btn-profile');
+        if (btnModel && btnProf) {
+          btnModel.className = !isProf ? 'py-2 rounded-lg border bg-orange-500/20 border-orange-500/50 text-orange-200' : 'py-2 rounded-lg border border-transparent text-slate-400 hover:text-white';
+          btnProf.className = isProf ? 'py-2 rounded-lg border bg-orange-500/20 border-orange-500/50 text-orange-200' : 'py-2 rounded-lg border border-transparent text-slate-400 hover:text-white';
+        }
       }
       if (act === 'screenshot') this.engine.exportScreenshot(this.currentAssetId);
       if (act === 'recenter' && this.engine.ready) this.engine.api.recenterCamera();
