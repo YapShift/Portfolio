@@ -1,11 +1,10 @@
 /**
- * YapShift 专属 3D 引擎与交互主模块 (app-engine.js v10.1 Fixed)
- * 彻底移除全部外部预设示例，仅保留 YapShift 指定的两个模型：
- *  1. Suspention (08632550c5604444a14b53dc339b6589)
- *  2. Stylized Rock LOD Preview - 5 Versions (f9963591aa36459b9837b7a9ca411438)
+ * YapShift 专属 3D 引擎与交互主模块 (app-engine.js v11.0 Parallel Cache & Zero-Drift Edition)
+ * 核心升级：
+ *  1. 多实例并行预加载与常驻显存池 (Multi-Iframe Parallel Pool)：启动时所有模型同时在后台并行初始化，切换模型 0 毫秒秒切，绝不重复加载！
+ *  2. 视觉中心 100% 锁死爆炸算法：配合 scene-math.js v11.0 的父级矩阵逆变换 + 实时视线轴向平滑拉远，彻底解决爆炸时模型飞向一边及镜头偏离中心的问题。
  */
 
-// 强制覆盖任何残留旧缓存，确保只存在你发的这 2 个模型！
 const YAPSHIFT_EXCLUSIVE_ASSETS = [
   {
     id: 'yapshift-suspention',
@@ -142,14 +141,54 @@ window.MotionFX = {
 };
 
 window.SketchfabEngine = class SketchfabEngine {
-  constructor(iframeId) {
-    this.iframeId = iframeId;
-    this.iframe = document.getElementById(iframeId);
-    this.api = null; this.ready = false; this.parts = []; this.materials = [];
-    this.pattern = 'radial'; this.baselineCam = null; this.camScale = 1.8;
-    this.postFx = { ssao: false, bloom: false, sharpen: false, cinema: false };
-    this.autoOrbitEnabled = true; this.orbitTimer = null; this.userInteracting = false;
-    this.loadToken = 0;
+  constructor(poolOrIframeId) {
+    this.poolContainer = document.getElementById('sketchfab-viewport-pool');
+    if (!this.poolContainer) {
+      const legacyFrame = document.getElementById(poolOrIframeId);
+      if (legacyFrame && legacyFrame.parentNode) {
+        const pool = document.createElement('div');
+        pool.id = 'sketchfab-viewport-pool';
+        pool.style.cssText = 'position: absolute; inset: 0; width: 100%; height: 100%; z-index: 10;';
+        legacyFrame.parentNode.replaceChild(pool, legacyFrame);
+        this.poolContainer = pool;
+      }
+    }
+
+    this.instances = new Map();
+    this.activeAssetId = null;
+    this.pattern = 'radial';
+    this.autoOrbitEnabled = true;
+    this.orbitTimer = null;
+    this.startOrbitLoop();
+  }
+
+  get activeCtx() {
+    return this.instances.get(this.activeAssetId) || null;
+  }
+
+  get ready() {
+    const ctx = this.activeCtx;
+    return Boolean(ctx && ctx.ready);
+  }
+
+  get api() {
+    const ctx = this.activeCtx;
+    return ctx ? ctx.api : null;
+  }
+
+  get parts() {
+    const ctx = this.activeCtx;
+    return ctx ? ctx.parts : [];
+  }
+
+  get postFx() {
+    const ctx = this.activeCtx;
+    return ctx ? ctx.postFx : { ssao: false, bloom: false, sharpen: false, cinema: false };
+  }
+
+  set postFx(val) {
+    const ctx = this.activeCtx;
+    if (ctx) ctx.postFx = val;
   }
 
   async fetchRestMeta(uid) {
@@ -161,38 +200,61 @@ window.SketchfabEngine = class SketchfabEngine {
     } catch { return {}; }
   }
 
-  // 每次切换模型时重建干净的 iframe 节点，避免旧 Sketchfab 实例事件冲突
-  resetIframeElement() {
-    const oldFrame = document.getElementById(this.iframeId);
-    if (!oldFrame || !oldFrame.parentNode) return this.iframe;
-    const newFrame = oldFrame.cloneNode(false);
-    newFrame.src = 'about:blank';
-    oldFrame.parentNode.replaceChild(newFrame, oldFrame);
-    this.iframe = newFrame;
-    return newFrame;
+  preloadAll(assets) {
+    if (!Array.isArray(assets)) return;
+    Bus.emit('engine:log', `> Parallel Preloader: 正在后台同时并行加载 ${assets.length} 个模型资产...`);
+    assets.forEach(asset => this.ensureInstance(asset));
   }
 
-  loadModel(asset) {
-    this.ready = false;
-    this.api = null;
-    this.parts = [];
-    this.materials = [];
-    this.stopOrbitLoop();
-    const currentToken = ++this.loadToken;
+  ensureInstance(asset) {
+    if (this.instances.has(asset.id)) {
+      return this.instances.get(asset.id);
+    }
 
-    Bus.emit('engine:loading', asset);
-    Bus.emit('engine:log', `> Initializing Sketchfab WebGL API for UID: ${asset.uid}...`);
+    const iframe = document.createElement('iframe');
+    iframe.id = `sf-frame-${asset.id}`;
+    iframe.style.cssText = 'position: absolute; inset: 0; width: 100%; height: 100%; border: 0; opacity: 0; pointer-events: none; z-index: 1; transition: opacity 0.18s ease;';
+    iframe.setAttribute('allow', 'autoplay; fullscreen; xr-spatial-tracking');
+    iframe.setAttribute('xr-spatial-tracking', '');
+    iframe.setAttribute('execution-while-out-of-viewport', '');
+    iframe.setAttribute('execution-while-not-rendered', '');
+    iframe.setAttribute('web-share', '');
+    iframe.setAttribute('allowfullscreen', '');
 
+    if (this.poolContainer) {
+      this.poolContainer.appendChild(iframe);
+    }
+
+    const ctx = {
+      asset,
+      iframe,
+      api: null,
+      ready: false,
+      loading: true,
+      parts: [],
+      materials: [],
+      strategy: 'SCANNING...',
+      polys: 0,
+      verts: 0,
+      officialName: null,
+      camScale: 1.2,
+      baselineCam: null,
+      explodeVal: 0,
+      shaderMode: 'rendered',
+      lightDeg: 0,
+      postFx: { ssao: false, bloom: false, sharpen: false, cinema: false },
+      userInteracting: false
+    };
+
+    this.instances.set(asset.id, ctx);
     const metaPromise = this.fetchRestMeta(asset.uid);
-    const targetIframe = this.resetIframeElement();
 
     if (typeof Sketchfab === 'undefined') {
       console.error('Sketchfab Viewer API script not loaded!');
-      return;
+      return ctx;
     }
 
-    const client = new Sketchfab('1.12.1', targetIframe);
-
+    const client = new Sketchfab('1.12.1', iframe);
     client.init(asset.uid, {
       autostart: 1,
       preload: 1,
@@ -202,164 +264,281 @@ window.SketchfabEngine = class SketchfabEngine {
       ui_watermark: 0,
       transparent: 1,
       success: (api) => {
-        if (currentToken !== this.loadToken) return;
-        this.api = api;
+        ctx.api = api;
         api.start();
         api.addEventListener('viewerready', () => {
-          if (currentToken !== this.loadToken) return;
-          this.ready = true;
-          api.addEventListener('camerastart', () => { this.userInteracting = true; });
-          api.addEventListener('cameraend', () => { setTimeout(() => { this.userInteracting = false; }, 1800); });
+          ctx.ready = true;
+          ctx.loading = false;
+          asset.isCachedReady = true;
+
+          api.addEventListener('camerastart', () => { ctx.userInteracting = true; });
+          api.addEventListener('cameraend', () => {
+            setTimeout(() => { ctx.userInteracting = false; }, 1500);
+          });
 
           api.getCameraLookAt((err, cam) => {
             if (!err && cam) {
-              const vx = cam.position[0] - cam.target[0], vy = cam.position[1] - cam.target[1], vz = cam.position[2] - cam.target[2];
+              const vx = cam.position[0] - cam.target[0];
+              const vy = cam.position[1] - cam.target[1];
+              const vz = cam.position[2] - cam.target[2];
               const dist = Math.hypot(vx, vy, vz);
-              this.camScale = dist > 0.01 ? dist * 0.26 : 1.6;
-              this.baselineCam = { target: cam.target.slice(), baseVec: [vx, vy, vz] };
+              ctx.camScale = dist > 0.01 ? dist * 0.22 : 1.2;
+              ctx.baselineCam = {
+                target: cam.target.slice(),
+                baseVec: [vx, vy, vz]
+              };
             }
-            if (this.autoOrbitEnabled) this.startOrbitLoop();
 
             api.getMaterialList((e1, mats) => {
-              this.materials = (!e1 && mats) ? JSON.parse(JSON.stringify(mats)) : [];
+              ctx.materials = (!e1 && mats) ? JSON.parse(JSON.stringify(mats)) : [];
               api.getNodeMap(async (e2, nodeMap) => {
-                if (currentToken !== this.loadToken) return;
-                const result = SceneGraphMath.analyzeAndBuildVectors(e2 ? null : nodeMap, this.camScale);
-                this.parts = result.parts;
+                const result = SceneGraphMath.analyzeAndBuildVectors(e2 ? null : nodeMap, ctx.camScale);
+                ctx.parts = result.parts;
+                ctx.strategy = result.strategy;
+
                 const meta = await metaPromise;
-                Bus.emit('engine:ready', {
-                  asset, parts: this.parts, strategy: result.strategy,
-                  polys: meta.faceCount || Math.max(12400, this.parts.length * 3650),
-                  verts: meta.vertexCount || Math.round((meta.faceCount || 18000) * 0.58),
-                  officialName: meta.officialName
-                });
-                Bus.emit('engine:log', `> Model Ready: ${asset.title} (${this.parts.length} parts, ${this.materials.length} mats)`);
+                ctx.polys = meta.faceCount || Math.max(12400, ctx.parts.length * 3650);
+                ctx.verts = meta.vertexCount || Math.round((meta.faceCount || 18000) * 0.58);
+                ctx.officialName = meta.officialName;
+                asset.loadedPolys = ctx.polys;
+
+                Bus.emit('engine:preload-updated', { asset, ctx });
+
+                if (this.activeAssetId === asset.id) {
+                  Bus.emit('engine:ready', {
+                    asset,
+                    parts: ctx.parts,
+                    strategy: ctx.strategy,
+                    polys: ctx.polys,
+                    verts: ctx.verts,
+                    officialName: ctx.officialName,
+                    ctx
+                  });
+                }
               });
             });
           });
         });
       },
       error: () => {
-        if (currentToken !== this.loadToken) return;
-        this.iframe.src = `https://sketchfab.com/models/${asset.uid}/embed?autostart=1&ui_theme=dark&transparent=1`;
-        const loadingEl = document.getElementById('loading-overlay');
-        if (loadingEl) loadingEl.classList.add('opacity-0', 'pointer-events-none');
-        Bus.emit('engine:log', `> [WARN] Sketchfab API Fallback Mode Activated.`);
+        ctx.loading = false;
+        iframe.src = `https://sketchfab.com/models/${asset.uid}/embed?autostart=1&ui_theme=dark&transparent=1`;
+        if (this.activeAssetId === asset.id) {
+          const loadingEl = document.getElementById('loading-overlay');
+          if (loadingEl) loadingEl.classList.add('opacity-0', 'pointer-events-none');
+        }
       }
     });
+
+    return ctx;
+  }
+
+  loadModel(asset) {
+    this.activeAssetId = asset.id;
+    const targetCtx = this.ensureInstance(asset);
+
+    this.instances.forEach((ctx, id) => {
+      if (id === asset.id) {
+        ctx.iframe.style.opacity = '1';
+        ctx.iframe.style.pointerEvents = 'auto';
+        ctx.iframe.style.zIndex = '20';
+      } else {
+        ctx.iframe.style.opacity = '0';
+        ctx.iframe.style.pointerEvents = 'none';
+        ctx.iframe.style.zIndex = '1';
+      }
+    });
+
+    if (targetCtx.ready) {
+      Bus.emit('engine:ready', {
+        asset,
+        parts: targetCtx.parts,
+        strategy: targetCtx.strategy,
+        polys: targetCtx.polys,
+        verts: targetCtx.verts,
+        officialName: targetCtx.officialName,
+        ctx: targetCtx
+      });
+      Bus.emit('engine:log', `> ⚡ Instant Cache Hit: [${asset.title}] 0ms 零延迟秒切完成！`);
+    } else {
+      Bus.emit('engine:loading', asset);
+      Bus.emit('engine:log', `> ⏳ 正在等待并行预加载完成: [${asset.title}]...`);
+    }
   }
 
   startOrbitLoop() {
     this.stopOrbitLoop();
-    let envDeg = 0;
     this.orbitTimer = setInterval(() => {
-      if (!this.ready || !this.api || !this.autoOrbitEnabled || this.userInteracting) return;
-      envDeg = (envDeg + 1.5) % 360;
-      this.api.setEnvironment({ enable: true, rotation: (envDeg * Math.PI) / 180 });
+      const ctx = this.activeCtx;
+      if (!ctx || !ctx.ready || !ctx.api || !this.autoOrbitEnabled || ctx.userInteracting) return;
+      ctx.lightDeg = (ctx.lightDeg + 1.5) % 360;
+      ctx.api.setEnvironment({ enable: true, rotation: (ctx.lightDeg * Math.PI) / 180 });
       const ls = document.getElementById('light-rot-slider'), ld = document.getElementById('light-rot-deg');
-      if (ls && ld) { ls.value = Math.round(envDeg); ld.textContent = Math.round(envDeg) + '°'; }
+      if (ls && ld) { ls.value = Math.round(ctx.lightDeg); ld.textContent = Math.round(ctx.lightDeg) + '°'; }
     }, 90);
   }
 
-  stopOrbitLoop() { if (this.orbitTimer) { clearInterval(this.orbitTimer); this.orbitTimer = null; } }
-  toggleAutoOrbit() { this.autoOrbitEnabled = !this.autoOrbitEnabled; this.autoOrbitEnabled ? this.startOrbitLoop() : this.stopOrbitLoop(); return this.autoOrbitEnabled; }
+  stopOrbitLoop() {
+    if (this.orbitTimer) { clearInterval(this.orbitTimer); this.orbitTimer = null; }
+  }
+
+  toggleAutoOrbit() {
+    this.autoOrbitEnabled = !this.autoOrbitEnabled;
+    return this.autoOrbitEnabled;
+  }
 
   captureBaseline(currentSliderVal) {
-    if (!this.ready || !this.api) return;
+    const ctx = this.activeCtx;
+    if (!ctx || !ctx.ready || !ctx.api) return Promise.resolve();
     const factor = (parseFloat(currentSliderVal) || 0) / 100;
-    this.api.getCameraLookAt((err, cam) => {
-      if (err || !cam) return;
-      const s = 1 + factor * 0.65;
-      this.baselineCam = { target: cam.target.slice(), baseVec: [(cam.position[0] - cam.target[0]) / s, (cam.position[1] - cam.target[1]) / s, (cam.position[2] - cam.target[2]) / s] };
+    return new Promise((resolve) => {
+      ctx.api.getCameraLookAt((err, cam) => {
+        if (!err && cam) {
+          const s = 1 + factor * 0.38;
+          ctx.baselineCam = {
+            target: [cam.target[0], cam.target[1], cam.target[2]],
+            baseVec: [
+              (cam.position[0] - cam.target[0]) / s,
+              (cam.position[1] - cam.target[1]) / s,
+              (cam.position[2] - cam.target[2]) / s
+            ]
+          };
+        }
+        resolve();
+      });
     });
   }
 
   explode(percent, adjustCam = true) {
-    if (!this.ready || !this.api) {
-      Bus.emit('engine:log', `> [WAIT] 模型仍在初始化中，请稍候...`);
-      return;
-    }
-    if (this.parts.length <= 1) {
+    const ctx = this.activeCtx;
+    if (!ctx || !ctx.ready || !ctx.api) return;
+    if (ctx.parts.length <= 1) {
       Bus.emit('engine:log', `> [INFO] 当前模型为单网格合并资产 (1 Mesh)，不支持子件拆解，请使用线框或灰模检视。`);
       return;
     }
-    const factor = (parseFloat(percent) || 0) / 100;
-    this.parts.forEach(p => {
-      const vec = this.pattern === 'axial' ? p.axialDir : p.radialDir, dist = factor * p.maxDistance;
-      this.api.translate(p.instanceID, [p.origPos[0] + vec[0] * dist, p.origPos[1] + vec[1] * dist, p.origPos[2] + vec[2] * dist], { duration: 0.06 });
+
+    ctx.explodeVal = parseFloat(percent) || 0;
+    const factor = ctx.explodeVal / 100;
+
+    ctx.parts.forEach(p => {
+      const localDelta = this.pattern === 'axial' ? p.localAxialVec : p.localRadialVec;
+      if (!localDelta) return;
+      ctx.api.translate(
+        p.instanceID,
+        [
+          p.origPos[0] + localDelta[0] * factor,
+          p.origPos[1] + localDelta[1] * factor,
+          p.origPos[2] + localDelta[2] * factor
+        ],
+        { duration: 0 }
+      );
     });
-    if (adjustCam && this.baselineCam) {
-      const z = 1 + factor * 0.65;
-      this.api.setCameraLookAt([this.baselineCam.target[0] + this.baselineCam.baseVec[0] * z, this.baselineCam.target[1] + this.baselineCam.baseVec[1] * z, this.baselineCam.target[2] + this.baselineCam.baseVec[2] * z], this.baselineCam.target, 0.12);
+
+    if (adjustCam && ctx.baselineCam) {
+      const z = 1 + factor * 0.38;
+      const t = ctx.baselineCam.target;
+      const v = ctx.baselineCam.baseVec;
+      ctx.api.setCameraLookAt(
+        [t[0] + v[0] * z, t[1] + v[1] * z, t[2] + v[2] * z],
+        t,
+        0
+      );
     }
-    Bus.emit('engine:log', `> YapShift Explode [${this.pattern.toUpperCase()}]: ${Math.round(percent)}% (${this.parts.length} parts)`);
+
+    Bus.emit('engine:log', `> YapShift Zero-Drift Explode [${this.pattern.toUpperCase()}]: ${Math.round(ctx.explodeVal)}% (${ctx.parts.length} parts)`);
   }
 
   setShading(mode) {
-    if (!this.ready || !this.api) {
-      Bus.emit('engine:log', `> [WAIT] 模型仍在加载中，请等待加载完成后切换材质模式。`);
+    const ctx = this.activeCtx;
+    if (!ctx || !ctx.ready || !ctx.api) return;
+    ctx.shaderMode = mode;
+
+    if (mode === 'wire') {
+      ctx.api.setShadingStyle('lit');
+      ctx.api.setWireframe(true, { color: 'F5792AFF' });
+      Bus.emit('engine:log', `> Wireframe Topology Overlay Enabled`);
       return;
     }
-    if (mode === 'wire') { this.api.setShadingStyle('lit'); this.api.setWireframe(true, { color: 'F5792AFF' }); Bus.emit('engine:log', `> Wireframe Topology Overlay Enabled`); return; }
-    this.api.setWireframe(false);
-    if (mode === 'clay')   { this.api.setShadingStyle('matcap');    Bus.emit('engine:log', `> Matcap Clay Shading Enabled`); return; }
-    if (mode === 'albedo') { this.api.setShadingStyle('shadeless'); Bus.emit('engine:log', `> Albedo BaseColor Inspector`); return; }
-    this.api.setShadingStyle('lit');
-    if (!this.materials.length) return;
-    this.api.getMaterialList((err, liveMats) => {
+    ctx.api.setWireframe(false);
+    if (mode === 'clay')   { ctx.api.setShadingStyle('matcap');    Bus.emit('engine:log', `> Matcap Clay Shading Enabled`); return; }
+    if (mode === 'albedo') { ctx.api.setShadingStyle('shadeless'); Bus.emit('engine:log', `> Albedo BaseColor Inspector`); return; }
+    ctx.api.setShadingStyle('lit');
+
+    if (!ctx.materials.length) return;
+    ctx.api.getMaterialList((err, liveMats) => {
       if (err || !liveMats) return;
       liveMats.forEach((mat, i) => {
-        if (this.materials[i]) mat.channels = JSON.parse(JSON.stringify(this.materials[i].channels));
+        if (ctx.materials[i]) mat.channels = JSON.parse(JSON.stringify(ctx.materials[i].channels));
         if (mode === 'chrome') {
           if (mat.channels.MetalnessPBR) { mat.channels.MetalnessPBR.factor = 1.0; mat.channels.MetalnessPBR.enable = true; }
           if (mat.channels.RoughnessPBR) { mat.channels.RoughnessPBR.factor = 0.03; mat.channels.RoughnessPBR.enable = true; }
         } else if (mode === 'xray' && mat.channels.Opacity) {
           mat.channels.Opacity.enable = true; mat.channels.Opacity.type = 'alphaBlend'; mat.channels.Opacity.factor = 0.28;
         }
-        this.api.setMaterial(mat);
+        ctx.api.setMaterial(mat);
       });
       Bus.emit('engine:log', `> Shader Mode Switched: [${mode.toUpperCase()}]`);
     });
   }
 
   togglePostFX(key) {
-    this.postFx[key] = !this.postFx[key];
-    if (!this.ready || !this.api) return this.postFx;
-    const any = Object.values(this.postFx).some(Boolean);
-    this.api.setPostProcessing({
-      enable: any, ssaoEnable: this.postFx.ssao, ssaoRadius: 0.15, ssaoIntensity: 0.75,
-      bloomEnable: this.postFx.bloom || this.postFx.cinema, bloomFactor: 0.85, bloomThreshold: 0.6,
-      sharpenEnable: this.postFx.sharpen, sharpenFactor: 0.45,
-      chromaticAberrationEnable: this.postFx.cinema, chromaticAberrationFactor: 0.025,
-      vignetteEnable: this.postFx.cinema, vignetteAmount: 0.45,
-      toneMappingEnable: this.postFx.cinema, toneMappingMethod: 'filmic'
+    const ctx = this.activeCtx;
+    if (!ctx) return { ssao: false, bloom: false, sharpen: false, cinema: false };
+    ctx.postFx[key] = !ctx.postFx[key];
+    if (!ctx.ready || !ctx.api) return ctx.postFx;
+
+    const any = Object.values(ctx.postFx).some(Boolean);
+    ctx.api.setPostProcessing({
+      enable: any, ssaoEnable: ctx.postFx.ssao, ssaoRadius: 0.15, ssaoIntensity: 0.75,
+      bloomEnable: ctx.postFx.bloom || ctx.postFx.cinema, bloomFactor: 0.85, bloomThreshold: 0.6,
+      sharpenEnable: ctx.postFx.sharpen, sharpenFactor: 0.45,
+      chromaticAberrationEnable: ctx.postFx.cinema, chromaticAberrationFactor: 0.025,
+      vignetteEnable: ctx.postFx.cinema, vignetteAmount: 0.45,
+      toneMappingEnable: ctx.postFx.cinema, toneMappingMethod: 'filmic'
     });
-    Bus.emit('engine:log', `> Post-FX Updated: ${JSON.stringify(this.postFx)}`);
-    return this.postFx;
+    Bus.emit('engine:log', `> Post-FX Updated: ${JSON.stringify(ctx.postFx)}`);
+    return ctx.postFx;
   }
 
-  rotateLight(deg) { if (!this.ready || !this.api) return; this.api.setEnvironment({ enable: true, rotation: (parseFloat(deg) * Math.PI) / 180 }); Bus.emit('engine:log', `> HDRI Light Rotation: ${deg}°`); }
+  rotateLight(deg) {
+    const ctx = this.activeCtx;
+    if (!ctx || !ctx.ready || !ctx.api) return;
+    ctx.lightDeg = parseFloat(deg) || 0;
+    ctx.api.setEnvironment({ enable: true, rotation: (ctx.lightDeg * Math.PI) / 180 });
+    Bus.emit('engine:log', `> HDRI Light Rotation: ${deg}°`);
+  }
 
   pulsePart(idx) {
-    const p = this.parts[idx];
-    if (!this.ready || !this.api || !p || !p.radialDir) return null;
+    const ctx = this.activeCtx;
+    const p = ctx && ctx.parts[idx];
+    if (!ctx || !ctx.ready || !ctx.api || !p || !p.localRadialVec) return null;
     p.pulsed = !p.pulsed;
-    const d = p.pulsed ? p.maxDistance * 0.75 : 0;
-    this.api.translate(p.instanceID, [p.origPos[0] + p.radialDir[0] * d, p.origPos[1] + p.radialDir[1] * d, p.origPos[2] + p.radialDir[2] * d], { duration: 0.25 });
+    const factor = p.pulsed ? 0.75 : (ctx.explodeVal / 100);
+    ctx.api.translate(
+      p.instanceID,
+      [
+        p.origPos[0] + p.localRadialVec[0] * factor,
+        p.origPos[1] + p.localRadialVec[1] * factor,
+        p.origPos[2] + p.localRadialVec[2] * factor
+      ],
+      { duration: 0.25 }
+    );
     return p.pulsed;
   }
 
   togglePartVis(idx) {
-    const p = this.parts[idx];
-    if (!this.ready || !this.api || !p) return null;
+    const ctx = this.activeCtx;
+    const p = ctx && ctx.parts[idx];
+    if (!ctx || !ctx.ready || !ctx.api || !p) return null;
     p.visible = !p.visible;
-    p.visible ? this.api.show(p.instanceID) : this.api.hide(p.instanceID);
+    p.visible ? ctx.api.show(p.instanceID) : ctx.api.hide(p.instanceID);
     return p.visible;
   }
 
   exportScreenshot(assetId) {
-    if (!this.ready || !this.api) return;
-    this.api.getScreenShot(1920, 1080, 'image/png', (err, url) => {
+    const ctx = this.activeCtx;
+    if (!ctx || !ctx.ready || !ctx.api) return;
+    ctx.api.getScreenShot(1920, 1080, 'image/png', (err, url) => {
       if (err || !url) return;
       const a = document.createElement('a'); a.href = url; a.download = `YapShift_Render_${assetId}_${Date.now()}.png`; a.click();
     });
@@ -373,7 +552,6 @@ window.StudioUI = {
     this.initialized = true;
     this.engine = engine;
 
-    // 强制只使用 YapShift 的 2 个专属模型，清除一切外部示例！
     if (!window.PortfolioConfig) window.PortfolioConfig = {};
     window.PortfolioConfig.assets = YAPSHIFT_EXCLUSIVE_ASSETS;
 
@@ -384,6 +562,11 @@ window.StudioUI = {
     this.renderProfileTab();
     this.bindGlobalEvents();
     this.bindBusListeners();
+
+    // 启动时立即在后台并行预加载所有模型！
+    this.engine.preloadAll(PortfolioConfig.assets);
+
+    // 激活第一个模型
     this.selectAsset(PortfolioConfig.assets[0].id);
   },
 
@@ -435,7 +618,7 @@ window.StudioUI = {
       PortfolioConfig.shaders.map(s => `<button data-action="shader" data-mode="${s.id}" id="btn-shade-${s.id}" class="px-2 py-1 rounded text-slate-400 hover:text-white transition">${s.label}</button>`).join('');
     document.getElementById('postfx-toolbar').innerHTML = `<span class="text-[9px] text-slate-500 font-mono mr-0.5">POST-FX:</span>` +
       PortfolioConfig.postFX.map(f => `<button data-action="postfx" data-fx="${f.id}" id="btn-fx-${f.id}" class="px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-slate-300 text-[10px] font-mono transition">${f.label}</button>`).join('') +
-      `<button data-action="recenter" class="px-2 py-1 bg-white/5 hover:bg-white/15 rounded text-slate-300 text-[10px] ml-1">⟳</button>`;
+      `<button data-action="recenter" class="px-2 py-1 bg-white/5 hover:bg-white/15 rounded text-slate-300 text-[10px] ml-1" title="重置相机视角中心">⟳</button>`;
   },
 
   renderProfileTab() {
@@ -465,7 +648,9 @@ window.StudioUI = {
     const assets = PortfolioConfig.assets;
     document.getElementById('gallery-count').textContent = `${assets.length} ASSETS`;
     document.getElementById('asset-list-container').innerHTML = assets.map((item, idx) => {
-      const badge = item.loadedPolys ? `<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">${(item.loadedPolys / 1000).toFixed(1)}k tris</span>` : `<span class="px-1.5 py-0.5 rounded bg-white/5 text-slate-500">待读取</span>`;
+      const badge = item.loadedPolys
+        ? `<span class="px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">⚡ ${(item.loadedPolys / 1000).toFixed(1)}k · 秒切</span>`
+        : `<span class="px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300 border border-sky-500/25 telemetry-scanning">⏳ 并行预载中...</span>`;
       return `<div data-action="select-asset" data-id="${item.id}" class="spotlight-card tilt-card p-3 rounded-xl flex flex-col gap-1.5 cursor-pointer ${item.id === this.currentAssetId ? 'active' : ''}"><div class="flex items-center justify-between text-[10px] font-mono pointer-events-none relative z-10"><span class="text-orange-400 font-bold">0${idx + 1} // ${item.category.split('//')[0]}</span>${badge}</div><div class="text-xs font-bold text-white truncate font-header pointer-events-none relative z-10">${item.title}</div><div class="flex items-center gap-1 pt-1 pointer-events-none relative z-10">${item.roles.map(r => `<div class="h-1 rounded-full ${r.color}" style="width:${r.pct}%"></div>`).join('')}</div></div>`;
     }).join('');
   },
@@ -488,14 +673,22 @@ window.StudioUI = {
     document.getElementById('role-legend-container').innerHTML = asset.roles.map(r => `<div class="bg-[#141b2d]/80 rounded px-2 py-1 border border-white/5"><div class="text-slate-400 text-[9px] truncate">${r.name}</div><div class="font-bold ${r.text}">${r.pct}%</div></div>`).join('');
     document.getElementById('panel-workflow').innerHTML = asset.workflow.map((w, i) => `<div data-action="workflow-step" data-wf="${w.action}" data-idx="${i}" class="pipeline-node spotlight-card rounded-xl p-2.5 flex flex-col gap-1"><div class="flex items-center justify-between pointer-events-none relative z-10"><span class="text-xs font-bold text-white font-header"><b class="text-orange-300 font-mono mr-1">${w.step}</b>${w.title}</span><span class="text-[9px] font-mono px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300">${w.tag} ➔</span></div><div class="text-[10px] text-slate-400 pointer-events-none relative z-10">${w.desc}</div></div>`).join('');
 
-    document.getElementById('explode-slider').value = 0;
-    document.getElementById('explode-percent').textContent = '0%';
-    this.engine.postFx = { ssao: false, bloom: false, sharpen: false, cinema: false };
+    const ctx = this.engine.ensureInstance(asset);
+    const savedExplode = ctx ? Math.round(ctx.explodeVal || 0) : 0;
+    document.getElementById('explode-slider').value = savedExplode;
+    document.getElementById('explode-percent').textContent = savedExplode + '%';
+
     PortfolioConfig.postFX.forEach(f => {
       const fxBtn = document.getElementById('btn-fx-' + f.id);
-      if (fxBtn) fxBtn.className = 'px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-slate-300 text-[10px] font-mono transition';
+      const isOn = ctx && ctx.postFx && ctx.postFx[f.id];
+      if (fxBtn) {
+        fxBtn.className = isOn
+          ? 'px-2 py-1 rounded bg-purple-500/30 border border-purple-400/50 text-purple-200 font-bold text-[10px] font-mono'
+          : 'px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-slate-300 text-[10px] font-mono transition';
+      }
     });
-    this.highlightShaderBtn('rendered');
+
+    this.highlightShaderBtn(ctx ? (ctx.shaderMode || 'rendered') : 'rendered');
     this.engine.loadModel(asset);
   },
 
@@ -507,42 +700,69 @@ window.StudioUI = {
     });
   },
 
-  animateExplodeTo(targetVal) {
-    this.engine.captureBaseline(document.getElementById('explode-slider').value);
-    const slider = document.getElementById('explode-slider'), obj = { val: parseFloat(slider.value) || 0 };
+  async animateExplodeTo(targetVal) {
+    const slider = document.getElementById('explode-slider');
+    await this.engine.captureBaseline(slider.value);
+    const obj = { val: parseFloat(slider.value) || 0 };
     if (typeof anime !== 'undefined') {
-      anime({ targets: obj, val: targetVal, duration: 520, easing: 'easeOutCubic', update: () => { slider.value = obj.val; document.getElementById('explode-percent').textContent = Math.round(obj.val) + '%'; this.engine.explode(obj.val, true); } });
-    } else { slider.value = targetVal; this.engine.explode(targetVal, true); }
+      anime({
+        targets: obj,
+        val: targetVal,
+        duration: 480,
+        easing: 'easeOutCubic',
+        update: () => {
+          slider.value = obj.val;
+          document.getElementById('explode-percent').textContent = Math.round(obj.val) + '%';
+          this.engine.explode(obj.val, true);
+        }
+      });
+    } else {
+      slider.value = targetVal;
+      document.getElementById('explode-percent').textContent = Math.round(targetVal) + '%';
+      this.engine.explode(targetVal, true);
+    }
   },
 
   bindBusListeners() {
+    Bus.on('engine:preload-updated', () => {
+      this.renderAssetCards();
+    });
+
     Bus.on('engine:loading', () => {
       document.getElementById('loading-overlay').classList.remove('opacity-0', 'pointer-events-none');
-      document.getElementById('telemetry-status-tag').textContent = 'CONNECTING SKETCHFAB API...';
-      ['spec-polys', 'spec-verts', 'spec-mats'].forEach(id => { const el = document.getElementById(id); el.textContent = 'SCANNING...'; el.className = 'text-xs font-bold text-slate-400 font-mono mt-0.5 telemetry-scanning'; });
+      document.getElementById('telemetry-status-tag').textContent = 'PARALLEL PRELOADING...';
+      ['spec-polys', 'spec-verts', 'spec-mats'].forEach(id => {
+        const el = document.getElementById(id);
+        el.textContent = 'SCANNING...';
+        el.className = 'text-xs font-bold text-slate-400 font-mono mt-0.5 telemetry-scanning';
+      });
     });
+
     Bus.on('engine:ready', ({ asset, parts, strategy, polys, verts, officialName }) => {
       document.getElementById('loading-overlay').classList.add('opacity-0', 'pointer-events-none');
       asset.loadedPolys = polys;
       if (asset.isCustom && officialName) asset.title = officialName;
       this.renderAssetCards();
+
       ['spec-polys', 'spec-verts'].forEach(id => { document.getElementById(id).className = 'text-sm font-bold text-white font-mono mt-0.5'; });
       document.getElementById('spec-mats').className = 'text-sm font-bold text-emerald-300 font-mono mt-0.5';
       document.getElementById('spec-polys').textContent = polys.toLocaleString();
       document.getElementById('spec-verts').textContent = verts.toLocaleString();
       document.getElementById('spec-mats').textContent = parts.length > 1 ? `${parts.length} 可拆子件` : `1 合并网格`;
-      document.getElementById('telemetry-status-tag').textContent = `✔ 场景树校验完毕 (${strategy})`;
+      document.getElementById('telemetry-status-tag').textContent = `✔ 已常驻缓存 (${strategy})`;
       document.getElementById('part-strategy-badge').textContent = strategy;
       document.getElementById('hud-nodes-badge').textContent = `${parts.length} 部件`;
       document.getElementById('hud-explode-mode').textContent = strategy;
       document.getElementById('explode-slider').disabled = parts.length <= 1;
+
       const listEl = document.getElementById('subpart-inspector-list');
       if (parts.length <= 1) {
         listEl.innerHTML = `<div class="p-2 rounded bg-amber-500/10 border border-amber-500/30 text-amber-200">⚠️ 单网格合并模型：内部仅有 1 个合并几何体，可使用 ⌗ 拓扑线框、◐ 雕塑灰模与光影旋转检视。</div>`;
       } else {
-        listEl.innerHTML = parts.map((p, idx) => `<div class="flex items-center justify-between px-2 py-1 rounded bg-[#131b2e]/90 border border-white/5"><span class="text-white truncate max-w-[175px]"><b class="text-orange-400 mr-1">#${idx + 1}</b>${p.name}</span><div class="flex gap-1"><button data-action="pulse-part" data-idx="${idx}" class="px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-300 text-[9px]">弹出</button><button data-action="vis-part" data-idx="${idx}" class="px-1.5 py-0.5 rounded bg-white/10 text-slate-200 text-[9px]">显隐</button></div></div>`).join('');
+        listEl.innerHTML = parts.map((p, idx) => `<div class="flex items-center justify-between px-2 py-1 rounded bg-[#131b2e]/90 border border-white/5"><span class="text-white truncate max-w-[175px]"><b class="text-orange-400 mr-1">#${idx + 1}</b>${p.name}</span><div class="flex gap-1"><button data-action="pulse-part" data-idx="${idx}" class="px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-300 text-[9px]">${p.pulsed ? '收回' : '弹出'}</button><button data-action="vis-part" data-idx="${idx}" class="px-1.5 py-0.5 rounded bg-white/10 text-slate-200 text-[9px]">${p.visible ? '显隐' : '已隐'}</button></div></div>`).join('');
       }
     });
+
     Bus.on('engine:log', (msg) => { document.getElementById('panel-api-log').textContent = msg; });
   },
 
@@ -602,21 +822,30 @@ window.StudioUI = {
         const match = raw.match(/[a-f0-9]{32}/i);
         const uid = match ? match[0] : raw.split('/').pop().split('-').pop();
         const newId = 'yapshift-' + Date.now();
-        PortfolioConfig.assets.unshift({
+        const newAsset = {
           id: newId, isCustom: true, title: document.getElementById('custom-model-title').value.trim() || 'YapShift 原创 3D 资产',
           category: 'YAPSHIFT // ORIGINAL ASSET', roleBadge: 'YapShift 100% 原创资产', uid,
           highlights: ['✦ 递归穿透 Group 识别', '✦ 零漂移对称爆炸'],
           roles: [{ name: '结构建模', pct: 60, color: 'bg-orange-500', text: 'text-orange-400' }, { name: '材质渲染', pct: 40, color: 'bg-sky-400', text: 'text-sky-400' }],
           workflow: [{ step: 'STEP 01', title: '360° 零均值中心对称爆炸', tag: '炸开 65%', action: 'explode65', desc: '自动提取子部件向四周对称散开。' }]
-        });
+        };
+        PortfolioConfig.assets.unshift(newAsset);
+        this.engine.ensureInstance(newAsset);
         this.selectAsset(newId);
       }
     });
 
     const expSlider = document.getElementById('explode-slider');
+    expSlider.addEventListener('pointerdown', () => this.engine.captureBaseline(expSlider.value));
     expSlider.addEventListener('mousedown', () => this.engine.captureBaseline(expSlider.value));
-    expSlider.addEventListener('input', (e) => { document.getElementById('explode-percent').textContent = Math.round(e.target.value) + '%'; this.engine.explode(e.target.value, true); });
-    document.getElementById('light-rot-slider').addEventListener('input', (e) => { document.getElementById('light-rot-deg').textContent = e.target.value + '°'; this.engine.rotateLight(e.target.value); });
+    expSlider.addEventListener('input', (e) => {
+      document.getElementById('explode-percent').textContent = Math.round(e.target.value) + '%';
+      this.engine.explode(e.target.value, true);
+    });
+    document.getElementById('light-rot-slider').addEventListener('input', (e) => {
+      document.getElementById('light-rot-deg').textContent = e.target.value + '°';
+      this.engine.rotateLight(e.target.value);
+    });
   }
 };
 
