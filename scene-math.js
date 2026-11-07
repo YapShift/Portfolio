@@ -1,11 +1,23 @@
 /**
- * 纯 3D 场景树递归与零漂移对称爆炸数学模块 (scene-math.js v11.0)
- * 核心升级：
- *  1. 严禁将 worldMatrix 位移误作 localMatrix 初始原点，彻底根除爆炸瞬间模型整体飞出视野中心的 Bug
- *  2. 引入父级矩阵逆变换补偿 (invParent3x3 = L_3x3 * inv(W_3x3))，确保无论父节点存在何种旋转/缩放，世界空间内的爆炸质心 100% 严格锁死在屏幕中心 (Σ ΔP_world = 0)
+ * 纯 3D 场景树递归、六向正交朝外爆炸与简易方框 Hitbox (AABB) 防重叠解算模块 (scene-math.js v12.0)
+ * 核心特性：
+ *  1. 严格限制爆炸方向为【上(+Y)、下(-Y)、左(-X)、右(+X)、前(+Z)、后(-Z)】6 个正交朝外方向
+ *  2. 为每个子部件自动生成简易方框型代理碰撞盒 (3D Proxy Box Hitbox / AABB)
+ *  3. 内置多轮 AABB 方框碰撞检测与朝外排斥解算器 (Box-Box Intersection & Outward MTD Solver)，确保爆炸后零件互不穿插重叠
+ *  4. 温和紧凑的爆炸幅度控制 + 对称质心校准，绝不飞散出界
  */
 window.SceneGraphMath = {
   IGNORE_NAME_RE: /^(root|scene|world|ground|floor|plane|shadow|stage|backdrop|camera|light|env|sky|grid|base_plane|shadow_plane|sketchfab_model|gltf_scene)/i,
+
+  // 严格定义的 6 个正交朝外标准方向（右、左、上、下、前、后）
+  CARDINAL_6_AXES: [
+    { id: '+X', label: '右(+X)', vec: [ 1,  0,  0], axisIdx: 0, sign:  1 },
+    { id: '-X', label: '左(-X)', vec: [-1,  0,  0], axisIdx: 0, sign: -1 },
+    { id: '+Y', label: '上(+Y)', vec: [ 0,  1,  0], axisIdx: 1, sign:  1 },
+    { id: '-Y', label: '下(-Y)', vec: [ 0, -1,  0], axisIdx: 1, sign: -1 },
+    { id: '+Z', label: '前(+Z)', vec: [ 0,  0,  1], axisIdx: 2, sign:  1 },
+    { id: '-Z', label: '后(-Z)', vec: [ 0,  0, -1], axisIdx: 2, sign: -1 }
+  ],
 
   hasGeometryInSubtree(node, nodeMap, visited = new Set()) {
     if (!node || visited.has(node.instanceID)) return false;
@@ -18,72 +30,186 @@ window.SceneGraphMath = {
     });
   },
 
-  // 3x3 矩阵求逆 (列主序 4x4 矩阵的左上 3x3 部分)
-  invertMat3FromMat4(m) {
-    if (!m || m.length < 11) return [1, 0, 0, 0, 1, 0, 0, 0, 1];
-    const a00 = m[0], a01 = m[1], a02 = m[2];
-    const a10 = m[4], a11 = m[5], a12 = m[6];
-    const a20 = m[8], a21 = m[9], a22 = m[10];
-
-    const b01 = a22 * a11 - a12 * a21;
-    const b11 = -a22 * a10 + a12 * a20;
-    const b21 = a21 * a10 - a11 * a20;
-
-    const det = a00 * b01 + a01 * b11 + a02 * b21;
-    if (Math.abs(det) < 1e-10) return [1, 0, 0, 0, 1, 0, 0, 0, 1];
-    const invDet = 1.0 / det;
-
-    return [
-      b01 * invDet,
-      (-a22 * a01 + a02 * a21) * invDet,
-      (a12 * a01 - a02 * a11) * invDet,
-      b11 * invDet,
-      (a22 * a00 - a02 * a20) * invDet,
-      (-a12 * a00 + a02 * a10) * invDet,
-      b21 * invDet,
-      (-a21 * a00 + a01 * a20) * invDet,
-      (a11 * a00 - a01 * a10) * invDet
-    ];
+  // 从 4x4 矩阵提取各轴缩放尺寸 [sx, sy, sz]
+  extractMatrixScale(m) {
+    if (!m || m.length < 11) return [1, 1, 1];
+    const sx = Math.hypot(m[0], m[1], m[2]) || 1;
+    const sy = Math.hypot(m[4], m[5], m[6]) || 1;
+    const sz = Math.hypot(m[8], m[9], m[10]) || 1;
+    return [sx, sy, sz];
   },
 
-  // 两个列主序 3x3 矩阵相乘: A * B
-  multiplyMat3(A, B) {
-    const out = new Array(9);
-    for (let col = 0; col < 3; col++) {
-      for (let row = 0; row < 3; row++) {
-        out[col * 3 + row] =
-          A[0 * 3 + row] * B[col * 3 + 0] +
-          A[1 * 3 + row] * B[col * 3 + 1] +
-          A[2 * 3 + row] * B[col * 3 + 2];
+  // 检测两个 3D 简易方框型 Hitbox (AABB) 是否发生重叠，并返回各轴重叠深度
+  checkBoxHitboxOverlap(posA, halfA, posB, halfB, padding = 1.08) {
+    const ox = (halfA[0] + halfB[0]) * padding - Math.abs(posA[0] - posB[0]);
+    if (ox <= 0) return null;
+    const oy = (halfA[1] + halfB[1]) * padding - Math.abs(posA[1] - posB[1]);
+    if (oy <= 0) return null;
+    const oz = (halfA[2] + halfB[2]) * padding - Math.abs(posA[2] - posB[2]);
+    if (oz <= 0) return null;
+    return [ox, oy, oz];
+  },
+
+  /**
+   * 为所有部件分配严格的【上下左右前后】6向正交朝外方向
+   * 若部件自带空间偏移，则顺应其离中心最显著的外推正交轴；同时自动均衡各轴负载
+   */
+  assignOrthogonalOutwardAxes(extracted, center, maxSpread) {
+    const count = extracted.length;
+    const axisCounts = [0, 0, 0, 0, 0, 0];
+    const assignments = new Array(count);
+
+    extracted.forEach((p, idx) => {
+      const dx = p.origPos[0] - center[0];
+      const dy = p.origPos[1] - center[1];
+      const dz = p.origPos[2] - center[2];
+      const dist = Math.hypot(dx, dy, dz);
+
+      if (maxSpread > 1e-3 && dist > maxSpread * 0.05) {
+        const rel = [dx / dist, dy / dist, dz / dist];
+        let bestAxis = 0;
+        let bestScore = -Infinity;
+
+        this.CARDINAL_6_AXES.forEach((ax, aIdx) => {
+          const dot = rel[0] * ax.vec[0] + rel[1] * ax.vec[1] + rel[2] * ax.vec[2];
+          const crowdPenalty = axisCounts[aIdx] * 0.22;
+          const score = dot - crowdPenalty;
+          if (dot > 0.05 && score > bestScore) {
+            bestScore = score;
+            bestAxis = aIdx;
+          }
+        });
+
+        assignments[idx] = this.CARDINAL_6_AXES[bestAxis];
+        axisCounts[bestAxis]++;
+      } else {
+        const aIdx = idx % 6;
+        assignments[idx] = this.CARDINAL_6_AXES[aIdx];
+        axisCounts[aIdx]++;
+      }
+    });
+
+    return assignments;
+  },
+
+  /**
+   * 简易方框型 Hitbox (AABB) 防重叠解算器：
+   * 零件仅沿其被分配的正交朝外轴 (上下左右前后) 移动，若检测到两个方框 Hitbox 重叠，
+   * 自动将外侧零件沿其正交朝外方向继续推开最小分离距离 (MTD)，确保爆炸后零件间无穿插重叠
+   */
+  solveOrthogonalHitboxExplosion(extracted, center, baseStep, mode = 'cardinal6') {
+    const count = extracted.length;
+    const boxHalves = extracted.map(p => {
+      const s = p.localScale || [1, 1, 1];
+      const norm = Math.cbrt(s[0] * s[1] * s[2]) || 1;
+      const rx = Math.max(0.55, Math.min(1.6, s[0] / norm));
+      const ry = Math.max(0.55, Math.min(1.6, s[1] / norm));
+      const rz = Math.max(0.55, Math.min(1.6, s[2] / norm));
+      const unitBox = baseStep * 0.22;
+      return [unitBox * rx, unitBox * ry, unitBox * rz];
+    });
+
+    const dirs = extracted.map((p, idx) => {
+      if (mode === 'axial') {
+        const sign = idx % 2 === 0 ? 1 : -1;
+        return [sign, 0, 0];
+      }
+      return p.cardinalAxis.vec.slice();
+    });
+
+    const distances = new Array(count).fill(0);
+    const groupsByDir = {};
+    extracted.forEach((p, idx) => {
+      const key = dirs[idx].join(',');
+      if (!groupsByDir[key]) groupsByDir[key] = [];
+      const rel = [p.origPos[0] - center[0], p.origPos[1] - center[1], p.origPos[2] - center[2]];
+      const proj = rel[0] * dirs[idx][0] + rel[1] * dirs[idx][1] + rel[2] * dirs[idx][2];
+      groupsByDir[key].push({ idx, proj });
+    });
+
+    Object.values(groupsByDir).forEach(list => {
+      list.sort((a, b) => a.proj - b.proj);
+      list.forEach((item, rank) => {
+        const tierRatio = (rank + 1) / list.length;
+        distances[item.idx] = baseStep * (0.32 + 0.58 * tierRatio);
+      });
+    });
+
+    const maxIterations = 18;
+    const maxClampDist = baseStep * 1.35;
+
+    for (let iter = 0; iter < maxIterations; iter++) {
+      let anyOverlap = false;
+
+      for (let i = 0; i < count; i++) {
+        for (let j = i + 1; j < count; j++) {
+          const posI = [
+            extracted[i].origPos[0] + dirs[i][0] * distances[i],
+            extracted[i].origPos[1] + dirs[i][1] * distances[i],
+            extracted[i].origPos[2] + dirs[i][2] * distances[i]
+          ];
+          const posJ = [
+            extracted[j].origPos[0] + dirs[j][0] * distances[j],
+            extracted[j].origPos[1] + dirs[j][1] * distances[j],
+            extracted[j].origPos[2] + dirs[j][2] * distances[j]
+          ];
+
+          const overlap = this.checkBoxHitboxOverlap(posI, boxHalves[i], posJ, boxHalves[j], 1.10);
+          if (!overlap) continue;
+
+          anyOverlap = true;
+          const axisI = Math.abs(dirs[i][0]) > 0.5 ? 0 : (Math.abs(dirs[i][1]) > 0.5 ? 1 : 2);
+          const axisJ = Math.abs(dirs[j][0]) > 0.5 ? 0 : (Math.abs(dirs[j][1]) > 0.5 ? 1 : 2);
+
+          if (axisI === axisJ) {
+            const push = overlap[axisI] * 0.55 + baseStep * 0.04;
+            if (distances[i] >= distances[j]) {
+              distances[i] = Math.min(maxClampDist, distances[i] + push);
+            } else {
+              distances[j] = Math.min(maxClampDist, distances[j] + push);
+            }
+          } else {
+            const pushI = Math.min(overlap[axisI] * 0.45, baseStep * 0.12);
+            const pushJ = Math.min(overlap[axisJ] * 0.45, baseStep * 0.12);
+            distances[i] = Math.min(maxClampDist, distances[i] + pushI);
+            distances[j] = Math.min(maxClampDist, distances[j] + pushJ);
+          }
+        }
+      }
+
+      if (!anyOverlap) break;
+    }
+
+    for (let axis = 0; axis < 3; axis++) {
+      const posIndices = [];
+      const negIndices = [];
+      let posSum = 0, negSum = 0;
+
+      for (let i = 0; i < count; i++) {
+        if (dirs[i][axis] > 0.5) { posIndices.push(i); posSum += distances[i]; }
+        else if (dirs[i][axis] < -0.5) { negIndices.push(i); negSum += distances[i]; }
+      }
+
+      if (posIndices.length > 0 && negIndices.length > 0 && posSum > 1e-5 && negSum > 1e-5) {
+        const targetAvg = (posSum + negSum) * 0.5;
+        const scalePos = Math.max(0.75, Math.min(1.25, targetAvg / posSum));
+        const scaleNeg = Math.max(0.75, Math.min(1.25, targetAvg / negSum));
+        posIndices.forEach(i => { distances[i] = Math.min(maxClampDist, distances[i] * scalePos); });
+        negIndices.forEach(i => { distances[i] = Math.min(maxClampDist, distances[i] * scaleNeg); });
       }
     }
-    return out;
+
+    return extracted.map((p, idx) => [
+      dirs[idx][0] * distances[idx],
+      dirs[idx][1] * distances[idx],
+      dirs[idx][2] * distances[idx]
+    ]);
   },
 
-  // 用列主序 3x3 矩阵变换 3D 向量: M * v
-  transformVec3(M, v) {
-    return [
-      M[0] * v[0] + M[3] * v[1] + M[6] * v[2],
-      M[1] * v[0] + M[4] * v[1] + M[7] * v[2],
-      M[2] * v[0] + M[5] * v[1] + M[8] * v[2]
-    ];
-  },
-
-  // 提取父节点的逆变换矩阵 inv(P_3x3) = L_3x3 * inv(W_3x3)
-  // 使得当 api.translate 修改 L[12..14] 时，世界空间真实位移严格等于 ΔP_world = P_3x3 * Δt_local
-  computeInvParentMat3(localMat, worldMat) {
-    const L3 = localMat && localMat.length >= 11
-      ? [localMat[0], localMat[1], localMat[2], localMat[4], localMat[5], localMat[6], localMat[8], localMat[9], localMat[10]]
-      : [1, 0, 0, 0, 1, 0, 0, 0, 1];
-    const invW3 = this.invertMat3FromMat4(worldMat);
-    return this.multiplyMat3(L3, invW3);
-  },
-
-  analyzeAndBuildVectors(nodeMap, cameraDistanceScale = 1.2) {
+  analyzeAndBuildVectors(nodeMap, cameraDistanceScale = 1.0) {
     if (!nodeMap) return { parts: [], strategy: 'NONE' };
     const allNodes = Object.values(nodeMap);
 
-    // 1. 寻找最深层的有效 MatrixTransform 零件节点
     const leafTransforms = allNodes.filter(n => {
       if (n.type !== 'MatrixTransform' || !this.hasGeometryInSubtree(n, nodeMap)) return false;
       const name = (n.name || '').trim();
@@ -112,14 +238,14 @@ window.SceneGraphMath = {
 
     if (leafTransforms.length > 1) {
       rawNodes = leafTransforms;
-      strategy = `MATRIX-PARTS (${leafTransforms.length})`;
+      strategy = `6-WAY ORTHO + HITBOX (${leafTransforms.length})`;
     } else if (leafTransforms.length === 1) {
       const childrenWithGeo = (leafTransforms[0].children || [])
         .map(ch => typeof ch === 'object' ? (nodeMap[ch.instanceID] || ch) : nodeMap[ch])
         .filter(ch => ch && this.hasGeometryInSubtree(ch, nodeMap));
       if (childrenWithGeo.length > 1) {
         rawNodes = childrenWithGeo;
-        strategy = `GROUP-SUBPARTS (${childrenWithGeo.length})`;
+        strategy = `6-WAY GROUP + HITBOX (${childrenWithGeo.length})`;
       } else {
         rawNodes = leafTransforms;
       }
@@ -141,115 +267,69 @@ window.SceneGraphMath = {
       };
     }
 
-    // 2. 提取每个部件的真实局部初始位置 origPos (严禁使用 worldMatrix[12..14] 冒充 localMatrix!)
     const extracted = rawNodes.map(n => {
       const lm = n.localMatrix;
       const wm = n.worldMatrix;
       const origLocalPos = lm ? [lm[12] || 0, lm[13] || 0, lm[14] || 0] : [0, 0, 0];
-      const worldPos = wm ? [wm[12] || 0, wm[13] || 0, wm[14] || 0] : origLocalPos.slice();
-      const invParent3x3 = this.computeInvParentMat3(lm, wm);
+      const localScale = this.extractMatrixScale(lm);
+      const worldScale = this.extractMatrixScale(wm);
+      const parentScaleRatio = Math.max(1e-4, ((worldScale[0] / localScale[0]) + (worldScale[1] / localScale[1]) + (worldScale[2] / localScale[2])) / 3);
 
       return {
         instanceID: n.instanceID,
         name: (n.name || `${n.type}_${n.instanceID}`).replace(/_/g, ' '),
         nodeType: n.type,
         origPos: origLocalPos,
-        worldPos,
-        invParent3x3
+        localScale,
+        parentScaleRatio
       };
     });
 
-    // 3. 在世界空间计算质心与真实分布跨度
-    let wcx = 0, wcy = 0, wcz = 0;
+    let cx = 0, cy = 0, cz = 0;
     extracted.forEach(p => {
-      wcx += p.worldPos[0];
-      wcy += p.worldPos[1];
-      wcz += p.worldPos[2];
+      cx += p.origPos[0];
+      cy += p.origPos[1];
+      cz += p.origPos[2];
     });
-    wcx /= count; wcy /= count; wcz /= count;
+    cx /= count; cy /= count; cz /= count;
+    const center = [cx, cy, cz];
 
-    let maxWorldSpread = 0;
-    let distinctCount = 0;
+    let maxLocalSpread = 0;
     extracted.forEach(p => {
-      const d = Math.hypot(p.worldPos[0] - wcx, p.worldPos[1] - wcy, p.worldPos[2] - wcz);
-      if (d > maxWorldSpread) maxWorldSpread = d;
-      if (d > 1e-3) distinctCount++;
+      const d = Math.hypot(p.origPos[0] - cx, p.origPos[1] - cy, p.origPos[2] - cz);
+      if (d > maxLocalSpread) maxLocalSpread = d;
     });
 
-    const worldBaseRadius = cameraDistanceScale;
-    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-    const rawWorldRadial = [];
-    const rawWorldAxial = [];
+    const avgParentScale = extracted.reduce((acc, p) => acc + p.parentScaleRatio, 0) / count;
+    const camStepInLocal = (cameraDistanceScale * 0.35) / (avgParentScale || 1);
+    const baseStep = maxLocalSpread > 1e-3
+      ? Math.min(maxLocalSpread * 0.38, camStepInLocal * 1.2)
+      : camStepInLocal;
 
-    // 4. 生成成对镜像的 3D 世界空间方向向量
+    const assignedAxes = this.assignOrthogonalOutwardAxes(extracted, center, maxLocalSpread);
     extracted.forEach((p, idx) => {
-      const dx = p.worldPos[0] - wcx;
-      const dy = p.worldPos[1] - wcy;
-      const dz = p.worldPos[2] - wcz;
-      const dist = Math.hypot(dx, dy, dz);
-
-      const t = (idx + 0.5) / count;
-      const fy = 1 - 2 * t;
-      const fr = Math.sqrt(Math.max(0, 1 - fy * fy));
-      const phi = goldenAngle * idx;
-      const fibVec = [Math.cos(phi) * fr, fy, Math.sin(phi) * fr];
-
-      let rx, ry, rz;
-      if (distinctCount >= count * 0.6 && dist > maxWorldSpread * 0.08) {
-        rx = (dx / dist) * 0.6 + fibVec[0] * 0.4;
-        ry = (dy / dist) * 0.6 + fibVec[1] * 0.4;
-        rz = (dz / dist) * 0.6 + fibVec[2] * 0.4;
-      } else if (idx % 2 === 1 && rawWorldRadial.length > 0) {
-        const prev = rawWorldRadial[idx - 1];
-        rx = -prev[0]; ry = -prev[1]; rz = -prev[2];
-      } else {
-        [rx, ry, rz] = fibVec;
-      }
-
-      const rLen = Math.hypot(rx, ry, rz) || 1;
-      const weight = 0.75 + 0.40 * ((Math.floor(idx / 2) % 3) / 2);
-      rawWorldRadial.push([(rx / rLen) * weight, (ry / rLen) * weight, (rz / rLen) * weight]);
-
-      const sign = idx % 2 === 0 ? 1 : -1;
-      const tier = Math.floor(idx / 2 + 1) / Math.ceil(count / 2);
-      const ax = sign * (0.45 + 0.55 * tier);
-      const ay = ((Math.floor(idx / 2) % 3) - 1) * 0.22 * sign;
-      const az = (Math.floor(idx / 2) % 2 === 0 ? 0.22 : -0.22) * sign;
-      const aLen = Math.hypot(ax, ay, az) || 1;
-      rawWorldAxial.push([(ax / aLen) * weight, (ay / aLen) * weight, (az / aLen) * weight]);
+      p.cardinalAxis = assignedAxes[idx];
     });
 
-    // 5. 在世界空间对带权位移向量执行严格零均值校准 (Σ V_world = [0, 0, 0])
-    const zeroBalanceWorldVectors = (vecs) => {
-      let mx = 0, my = 0, mz = 0;
-      vecs.forEach(v => { mx += v[0]; my += v[1]; mz += v[2]; });
-      mx /= count; my /= count; mz /= count;
-      return vecs.map(v => [
-        (v[0] - mx) * worldBaseRadius,
-        (v[1] - my) * worldBaseRadius,
-        (v[2] - mz) * worldBaseRadius
-      ]);
-    };
+    const cardinalDisplacements = this.solveOrthogonalHitboxExplosion(extracted, center, baseStep, 'cardinal6');
+    const axialDisplacements = this.solveOrthogonalHitboxExplosion(extracted, center, baseStep, 'axial');
 
-    const balancedWorldRadial = zeroBalanceWorldVectors(rawWorldRadial);
-    const balancedWorldAxial = zeroBalanceWorldVectors(rawWorldAxial);
-
-    // 6. 通过 invParent3x3 转换为每个节点 localMatrix 下的精确位移向量
     const parts = extracted.map((p, idx) => {
-      const localRadialFull = this.transformVec3(p.invParent3x3, balancedWorldRadial[idx]);
-      const localAxialFull = this.transformVec3(p.invParent3x3, balancedWorldAxial[idx]);
-      const rMag = Math.hypot(localRadialFull[0], localRadialFull[1], localRadialFull[2]) || 1;
+      const cVec = cardinalDisplacements[idx];
+      const aVec = axialDisplacements[idx];
+      const cMag = Math.hypot(cVec[0], cVec[1], cVec[2]) || 1;
 
       return {
         instanceID: p.instanceID,
-        name: p.name,
+        name: `${p.name} [${p.cardinalAxis.id}]`,
         nodeType: p.nodeType,
         origPos: p.origPos,
-        localRadialVec: localRadialFull,
-        localAxialVec: localAxialFull,
-        radialDir: [localRadialFull[0] / rMag, localRadialFull[1] / rMag, localRadialFull[2] / rMag],
-        axialDir: localAxialFull,
-        maxDistance: rMag,
+        cardinalLabel: p.cardinalAxis.label,
+        localRadialVec: cVec,
+        localAxialVec: aVec,
+        radialDir: [cVec[0] / cMag, cVec[1] / cMag, cVec[2] / cMag],
+        axialDir: aVec,
+        maxDistance: cMag,
         visible: true,
         pulsed: false
       };
