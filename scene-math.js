@@ -1,4 +1,7 @@
-// scene-math.js - 深度子树递归与零漂移对称爆炸向量计算库
+/**
+ * 纯 3D 场景树递归与零漂移对称爆炸数学模块 (scene-math.js)
+ * 零 DOM 依赖，负责穿透 Group 层级提取真实子部件并计算正负镜像零均值向量
+ */
 window.SceneGraphMath = {
   hasGeometryInSubtree(node, nodeMap, visited = new Set()) {
     if (!node || visited.has(node.instanceID)) return false;
@@ -12,6 +15,7 @@ window.SceneGraphMath = {
     if (!nodeMap) return { parts: [], strategy: 'NONE' };
     const allNodes = Object.values(nodeMap);
 
+    // 1. 递归寻找最底层包含 Geometry 的 MatrixTransform
     const leafTransforms = allNodes.filter(n => {
       if (n.type !== 'MatrixTransform' || !this.hasGeometryInSubtree(n, nodeMap)) return false;
       let hasDeeper = false;
@@ -67,6 +71,7 @@ window.SceneGraphMath = {
       };
     });
 
+    // 2. 质心与跨度计算
     let cx = 0, cy = 0, cz = 0;
     extracted.forEach(p => { cx += p.origPos[0]; cy += p.origPos[1]; cz += p.origPos[2]; });
     cx /= count; cy /= count; cz /= count;
@@ -82,6 +87,7 @@ window.SceneGraphMath = {
     const goldenAngle = Math.PI * (3 - Math.sqrt(5));
     const radialDirs = [], axialDirs = [];
 
+    // 3. 成对正负镜像采样 (Paired Antithetic Sampling)
     extracted.forEach((p, idx) => {
       const dx = p.origPos[0] - cx, dy = p.origPos[1] - cy, dz = p.origPos[2] - cz;
       const dist = Math.hypot(dx, dy, dz);
@@ -103,6 +109,7 @@ window.SceneGraphMath = {
       axialDirs.push([sign * (0.4 + 0.6 * tier), ((Math.floor(idx / 2) % 3) - 1) * 0.2 * sign, (Math.floor(idx / 2) % 2 === 0 ? 0.2 : -0.2) * sign]);
     });
 
+    // 4. 严格零均值中心化校准 (Σ v = 0)
     const zeroCenter = (dirs) => {
       let mx = 0, my = 0, mz = 0;
       dirs.forEach(v => { mx += v[0]; my += v[1]; mz += v[2]; });
