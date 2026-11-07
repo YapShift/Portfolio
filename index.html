@@ -3,12 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>YAPSHIFT // 3D HARD-SURFACE & TECHNICAL ART SHOWREEL</title>
-  <!-- Tailwind CSS -->
+  <title>YAPSHIFT // KINETIC 3D SHOWREEL & TELEMETRY WORKBENCH</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- Anime.js 官方物理动效引擎 -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.2/anime.min.js"></script>
-  <!-- Sketchfab 官方 Viewer API -->
   <script src="https://static.sketchfab.com/api/sketchfab-viewer-1.12.1.js"></script>
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,500;0,600;0,700;1,700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
@@ -16,7 +13,7 @@
     :root {
       --accent: #f5792a;
       --accent-cyan: #38bdf8;
-      --bg-dark: #05070b;
+      --bg-dark: #04060a;
     }
 
     * { box-sizing: border-box; }
@@ -30,39 +27,57 @@
     .font-header { font-family: 'Chakra Petch', sans-serif; }
 
     ::-webkit-scrollbar { width: 4px; height: 4px; }
-    ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.14); border-radius: 2px; }
+    ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.16); border-radius: 2px; }
     ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
 
-    /* Aceternity UI 风格：鼠标跟随径向聚光灯卡片 (Spotlight Card) */
+    /* 呼吸极光漂浮球 (Background Aurora Orbs) */
+    @keyframes floatAurora {
+      0%, 100% { transform: translate(0px, 0px) scale(1); }
+      33% { transform: translate(40px, -30px) scale(1.12); }
+      66% { transform: translate(-30px, 25px) scale(0.92); }
+    }
+    .aurora-orb {
+      position: fixed;
+      border-radius: 9999px;
+      filter: blur(90px);
+      pointer-events: none;
+      z-index: 0;
+      animation: floatAurora 14s infinite ease-in-out;
+    }
+
+    /* Aceternity UI 聚光灯 + 3D 鼠标倾斜卡片 */
     .spotlight-card {
       position: relative;
       overflow: hidden;
-      background: rgba(13, 18, 29, 0.85);
-      border: 1px solid rgba(255, 255, 255, 0.07);
-      transition: border-color 0.25s ease, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      background: rgba(12, 17, 28, 0.65);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      transform-style: preserve-3d;
+      transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.18s ease-out;
     }
     .spotlight-card::before {
       content: '';
       position: absolute;
       inset: 0;
       background: radial-gradient(
-        320px circle at var(--mouse-x, -500px) var(--mouse-y, -500px),
-        rgba(245, 121, 42, 0.16),
+        280px circle at var(--mouse-x, -500px) var(--mouse-y, -500px),
+        rgba(245, 121, 42, 0.22),
         transparent 70%
       );
       pointer-events: none;
       z-index: 1;
     }
     .spotlight-card:hover {
-      border-color: rgba(245, 121, 42, 0.45);
+      border-color: rgba(245, 121, 42, 0.55);
+      box-shadow: 0 8px 25px -6px rgba(56, 189, 248, 0.2);
     }
     .spotlight-card.active {
       border-color: var(--accent);
-      background: linear-gradient(135deg, rgba(245, 121, 42, 0.18) 0%, rgba(12, 17, 28, 0.95) 100%);
-      box-shadow: 0 10px 28px -8px rgba(245, 121, 42, 0.4), inset 3px 0 0 var(--accent);
+      background: linear-gradient(135deg, rgba(245, 121, 42, 0.22) 0%, rgba(12, 17, 28, 0.85) 100%);
+      box-shadow: 0 10px 28px -6px rgba(245, 121, 42, 0.45), inset 3px 0 0 var(--accent);
     }
 
-    /* Uiverse / Aceternity 流光旋转边框按钮 */
+    /* Uiverse 流光旋转边框按钮 */
     @keyframes spinConic {
       from { transform: rotate(0deg); }
       to { transform: rotate(360deg); }
@@ -80,42 +95,68 @@
       content: '';
       position: absolute;
       inset: -120%;
-      background: conic-gradient(from 0deg, transparent 55%, #38bdf8 75%, #f5792a 100%);
-      animation: spinConic 3.2s linear infinite;
+      background: conic-gradient(from 0deg, transparent 50%, #38bdf8 75%, #f5792a 100%);
+      animation: spinConic 2.8s linear infinite;
     }
     .uiverse-cta:hover {
-      transform: scale(1.04);
-      box-shadow: 0 0 35px rgba(245, 121, 42, 0.45);
+      transform: scale(1.05);
+      box-shadow: 0 0 40px rgba(245, 121, 42, 0.55);
     }
     .uiverse-cta-inner {
       position: relative;
       z-index: 2;
-      background: #090d16;
+      background: #080c14;
       border-radius: 9999px;
     }
 
-    /* 背景极光网格 */
-    .aurora-bg {
-      background-image:
-        radial-gradient(ellipse 80% 50% at 50% -15%, rgba(245, 121, 42, 0.18), transparent),
-        radial-gradient(ellipse 60% 40% at 85% 100%, rgba(56, 189, 248, 0.12), transparent),
-        linear-gradient(to right, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-        linear-gradient(to bottom, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-      background-size: 100% 100%, 100% 100%, 28px 28px, 28px 28px;
+    /* 3D 视口底层：全息旋转雷达星环 (Holographic Reticle Rings) */
+    @keyframes spinSlowCW { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    @keyframes spinSlowCCW { from { transform: rotate(360deg); } to { transform: rotate(0deg); } }
+    .reticle-cw { animation: spinSlowCW 38s linear infinite; transform-origin: center; }
+    .reticle-ccw { animation: spinSlowCCW 26s linear infinite; transform-origin: center; }
+
+    /* 激光扫描线动画 */
+    @keyframes laserSweep {
+      0% { top: -5%; opacity: 0; }
+      15% { opacity: 0.55; }
+      85% { opacity: 0.55; }
+      100% { top: 105%; opacity: 0; }
+    }
+    .viewport-laser-line {
+      position: absolute;
+      left: 0; right: 0; height: 1px;
+      background: linear-gradient(90deg, transparent 5%, rgba(56, 189, 248, 0.5) 50%, transparent 95%);
+      box-shadow: 0 0 12px rgba(56, 189, 248, 0.4);
+      pointer-events: none;
+      animation: laserSweep 6.5s ease-in-out infinite;
+    }
+
+    /* 实时跳动音频/遥测波形柱 */
+    @keyframes eqBounce {
+      0%, 100% { transform: scaleY(0.25); }
+      50% { transform: scaleY(1); }
+    }
+    .eq-bar {
+      width: 3px;
+      height: 14px;
+      background: #f5792a;
+      border-radius: 2px;
+      transform-origin: bottom;
+      animation: eqBounce 0.8s infinite ease-in-out;
     }
 
     .pipeline-node { transition: all 0.2s ease; cursor: pointer; }
-    .pipeline-node:hover { border-color: rgba(56, 189, 248, 0.6); background: rgba(56, 189, 248, 0.08); transform: translateY(-1px); }
-    .pipeline-node.active-step { border-color: var(--accent); background: rgba(245, 121, 42, 0.15); }
+    .pipeline-node:hover { border-color: rgba(56, 189, 248, 0.65); background: rgba(56, 189, 248, 0.12); transform: translateX(4px); }
+    .pipeline-node.active-step { border-color: var(--accent); background: rgba(245, 121, 42, 0.18); }
 
-    .hud-bracket { position: absolute; width: 16px; height: 16px; border-color: rgba(245, 121, 42, 0.55); pointer-events: none; z-index: 10; }
+    .hud-bracket { position: absolute; width: 18px; height: 18px; border-color: rgba(245, 121, 42, 0.65); pointer-events: none; z-index: 10; }
 
     @keyframes scanBlink { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; color: #38bdf8; } }
     .telemetry-scanning { animation: scanBlink 0.9s infinite ease-in-out; }
 
     input[type="range"].studio-slider {
       -webkit-appearance: none; appearance: none; height: 5px;
-      background: linear-gradient(90deg, rgba(245,121,42,0.45), rgba(56,189,248,0.45));
+      background: linear-gradient(90deg, rgba(245,121,42,0.5), rgba(56,189,248,0.5));
       border-radius: 3px; outline: none;
     }
     input[type="range"].studio-slider::-webkit-slider-thumb {
@@ -126,71 +167,84 @@
     input[type="range"].studio-slider:disabled { opacity: 0.3; cursor: not-allowed; }
   </style>
 </head>
-<body class="h-screen w-screen flex flex-col aurora-bg relative">
+<body class="h-screen w-screen flex flex-col relative">
 
   <!-- =========================================================================
-       STAGE 01: 点进网站第一眼看到的「YAPSHIFT 电影级 Showreel 序幕层」
+       LAYER 00: 全域 60FPS 动态拓扑粒子网与流星光束背景 (贯穿首屏与 Workbench!)
        ========================================================================= -->
-  <div id="hero-showreel-overlay" class="fixed inset-0 z-50 flex flex-col justify-between p-8 bg-[#05070c]/85 backdrop-blur-xl transition-opacity duration-500">
-    <div id="hero-spotlight" class="pointer-events-none fixed inset-0 z-0" style="background: radial-gradient(600px circle at 50% 40%, rgba(245, 121, 42, 0.14), transparent 70%);"></div>
+  <canvas id="kinetic-bg-canvas" class="fixed inset-0 pointer-events-none z-0"></canvas>
+  <div class="aurora-orb w-96 h-96 bg-orange-500/15 top-[-8%] left-[15%]"></div>
+  <div class="aurora-orb w-96 h-96 bg-sky-500/15 bottom-[-10%] right-[12%]" style="animation-delay: -5s;"></div>
+
+  <!-- =========================================================================
+       STAGE 01: 点进网站第一眼看到的「YAPSHIFT 动态粒子 Showreel 序幕层」
+       ========================================================================= -->
+  <div id="hero-showreel-overlay" class="fixed inset-0 z-50 flex flex-col justify-between p-8 bg-[#04060b]/65 backdrop-blur-md transition-opacity duration-500">
+    <div id="hero-spotlight" class="pointer-events-none fixed inset-0 z-0"></div>
 
     <!-- 序幕顶部品牌栏 -->
     <div class="relative z-10 flex items-center justify-between border-b border-white/10 pb-4">
       <div class="flex items-center gap-3">
         <div class="w-3.5 h-3.5 bg-[#f5792a] rotate-45 shadow-[0_0_12px_#f5792a]"></div>
-        <span class="font-header font-bold tracking-widest text-sm text-white">YAPSHIFT // PORTFOLIO SHOWREEL</span>
-        <span class="text-[10px] px-2 py-0.5 rounded bg-orange-500/15 text-orange-300 border border-orange-500/30 font-mono">2025 EDITION</span>
+        <span class="font-header font-bold tracking-widest text-sm text-white">YAPSHIFT // KINETIC 3D SHOWREEL</span>
+        <span class="text-[10px] px-2 py-0.5 rounded bg-orange-500/15 text-orange-300 border border-orange-500/30 font-mono">INTERACTIVE v8.0</span>
       </div>
-      <div class="flex items-center gap-4 text-xs font-mono text-slate-400">
-        <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> WEBGL ENGINE ONLINE</span>
+      <div class="flex items-center gap-4 text-xs font-mono text-slate-300">
+        <div class="flex items-center gap-1">
+          <div class="eq-bar" style="animation-delay:0s"></div>
+          <div class="eq-bar" style="animation-delay:0.2s; background:#38bdf8"></div>
+          <div class="eq-bar" style="animation-delay:0.4s"></div>
+          <span class="ml-1.5 text-[11px] text-emerald-400">PARTICLE FIELD & WEBGL ACTIVE</span>
+        </div>
         <a href="https://yapshift.github.io/Portfolio/" target="_blank" class="text-sky-400 hover:underline">yapshift.github.io/Portfolio ↗</a>
       </div>
     </div>
 
     <!-- 序幕中央：视觉冲击主舞台 -->
     <div class="relative z-10 max-w-4xl mx-auto text-center space-y-6 my-auto">
-      <div class="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-white/5 border border-white/10 text-[11px] text-orange-300 font-mono">
-        <span>⚡ INTERACTIVE 3D ASSET & PARAMETRIC ENGINEERING</span>
+      <div class="inline-flex items-center gap-2 px-4 py-1 rounded-full bg-white/5 border border-white/15 text-[11px] text-orange-300 font-mono shadow-[0_0_20px_rgba(245,121,42,0.15)]">
+        <span class="w-2 h-2 rounded-full bg-orange-400 animate-ping"></span>
+        <span>MOVE CURSOR TO INTERACT WITH 3D TOPOLOGY FIELD</span>
       </div>
 
       <h1 class="font-header text-5xl md:text-7xl font-bold tracking-tight text-white leading-none">
-        <span id="hero-scramble-name" class="text-transparent bg-clip-text bg-gradient-to-r from-white via-orange-200 to-orange-500">YAPSHIFT</span>
-        <span class="block text-xl md:text-2xl font-medium text-slate-300 mt-3 tracking-widest uppercase" id="hero-scramble-sub">
-          ARCHITECTING PRECISION 3D & WEBGL EXPERIENCES
+        <span id="hero-scramble-name" class="text-transparent bg-clip-text bg-gradient-to-r from-white via-orange-200 to-orange-500 drop-shadow-[0_0_25px_rgba(245,121,42,0.35)]">YAPSHIFT</span>
+        <span class="block text-xl md:text-2xl font-medium text-slate-200 mt-3 tracking-widest uppercase" id="hero-scramble-sub">
+          ARCHITECTING KINETIC 3D & PARAMETRIC SYSTEMS
         </span>
       </h1>
 
-      <p class="max-w-2xl mx-auto text-xs md:text-sm text-slate-400 leading-relaxed font-mono">
-        不局限于静态渲染图——在这里，你可以直接实时接管我的 3D 资产：执行<b class="text-orange-300">零漂移对称爆炸拆解</b>、穿透检视 <b class="text-sky-300">X-Ray 内部机械公差</b>、切换 <b class="text-emerald-300">拓扑布线与电影级胶片后期</b>。
+      <p class="max-w-2xl mx-auto text-xs md:text-sm text-slate-300 leading-relaxed font-mono">
+        将鼠标划过下方卡片体验 3D 视差反馈——进入工作站后，你将直接操控 <b class="text-orange-300">360° 零漂移对称爆炸</b>、<b class="text-sky-300">X-Ray 幽灵内腔透视</b> 与 <b class="text-emerald-300">实时动态转台巡航</b>。
       </p>
 
-      <!-- 3 张 Bento 核心价值名片 -->
-      <div class="grid grid-cols-1 md:grid-cols-3 gap-3.5 pt-2 text-left">
-        <div class="spotlight-card rounded-2xl p-4 space-y-1.5 hero-bento-item">
+      <!-- 3 张支持 3D 透视倾斜的 Bento 核心名片 -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 text-left">
+        <div class="spotlight-card tilt-card rounded-2xl p-4 space-y-1.5 hero-bento-item">
           <div class="flex items-center justify-between text-[10px] font-mono text-orange-400">
             <span>01 // HARD-SURFACE</span>
             <span>96% PROFICIENCY</span>
           </div>
           <div class="text-sm font-bold text-white font-header">影视/游戏级硬表面与拓扑</div>
-          <div class="text-[11px] text-slate-400 leading-relaxed">严格四边面卡线、高低模烘焙与 4K Substance 多层金属做旧质感。</div>
+          <div class="text-[11px] text-slate-300 leading-relaxed">严格四边面卡线、高低模烘焙与 4K Substance 多层金属做旧质感。</div>
         </div>
 
-        <div class="spotlight-card rounded-2xl p-4 space-y-1.5 hero-bento-item">
+        <div class="spotlight-card tilt-card rounded-2xl p-4 space-y-1.5 hero-bento-item">
           <div class="flex items-center justify-between text-[10px] font-mono text-sky-400">
             <span>02 // PARAMETRIC CAD</span>
             <span>0.15MM TOLERANCE</span>
           </div>
           <div class="text-sm font-bold text-white font-header">OpenSCAD & 3D 打印机械工程</div>
-          <div class="text-[11px] text-slate-400 leading-relaxed">主导 MGN12H 线性导轨与 BMG 挤出机模块化打印头参数化研发落地。</div>
+          <div class="text-[11px] text-slate-300 leading-relaxed">主导 MGN12H 线性导轨与 BMG 挤出机模块化打印头参数化研发落地。</div>
         </div>
 
-        <div class="spotlight-card rounded-2xl p-4 space-y-1.5 hero-bento-item">
+        <div class="spotlight-card tilt-card rounded-2xl p-4 space-y-1.5 hero-bento-item">
           <div class="flex items-center justify-between text-[10px] font-mono text-emerald-400">
             <span>03 // TECHNICAL ART</span>
-            <span>DECOUPLED WEBGL</span>
+            <span>KINETIC WEBGL</span>
           </div>
           <div class="text-sm font-bold text-white font-header">实时 3D 交互与全栈产品化</div>
-          <div class="text-[11px] text-slate-400 leading-relaxed">自研场景树深度扫描拆解算法与 JK AI 交互式教育系统前端工程。</div>
+          <div class="text-[11px] text-slate-300 leading-relaxed">自研场景树深度扫描拆解算法与 JK AI 交互式教育系统前端工程。</div>
         </div>
       </div>
 
@@ -199,15 +253,14 @@
         <button data-action="enter-workbench" class="uiverse-cta">
           <div class="uiverse-cta-inner px-8 py-3.5 flex items-center gap-3 text-sm font-bold font-header tracking-wider text-white">
             <span class="w-2.5 h-2.5 rounded-full bg-orange-500 animate-ping"></span>
-            <span>LAUNCH 3D WORKBENCH // 进入实时 3D 检视工作站</span>
+            <span>LAUNCH 3D WORKBENCH // 启动全息 3D 检视工作站</span>
             <span class="text-orange-400">➔</span>
           </div>
         </button>
-        <span class="text-[10px] text-slate-500 font-mono">提示：后台已为您同步预加载 3D 机械总成，点击即可零延迟操控</span>
+        <span class="text-[10px] text-slate-400 font-mono">点击后将触发机甲舱门物理展开动画 + 3D 镜头自动环绕巡航</span>
       </div>
     </div>
 
-    <!-- 序幕底部跑马灯指标栏 -->
     <div class="relative z-10 border-t border-white/10 pt-4 flex items-center justify-between text-[11px] font-mono text-slate-400">
       <div>DESIGNED & ENGINEERED BY <b class="text-white">YAPSHIFT</b></div>
       <div class="flex items-center gap-5">
@@ -221,24 +274,29 @@
   </div>
 
   <!-- =========================================================================
-       STAGE 02: 解耦式 3D 实时后处理与遥测工作台 (主界面)
+       STAGE 02: 全透明毛玻璃动态 3D 工作台 (透出底层粒子网 + 视口全息旋转星环)
        ========================================================================= -->
-  <header class="h-14 border-b border-white/10 bg-[#090c14]/90 backdrop-blur-md px-6 flex items-center justify-between shrink-0 z-20">
+  <header id="workbench-header" class="h-14 border-b border-white/10 bg-[#080b13]/70 backdrop-blur-md px-6 flex items-center justify-between shrink-0 z-20">
     <div class="flex items-center gap-3">
       <div class="w-3 h-3 bg-[#f5792a] rotate-45 shadow-[0_0_10px_#f5792a]"></div>
-      <span class="font-header font-bold tracking-wider text-sm text-white">YAPSHIFT // 3D INTERACTIVE WORKBENCH</span>
-      <span class="text-[10px] px-2 py-0.5 bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 rounded font-mono">
-        SHOWREEL v7.0
-      </span>
+      <span class="font-header font-bold tracking-wider text-sm text-white">YAPSHIFT // KINETIC 3D WORKBENCH</span>
+      <!-- 实时动态遥测频谱条 -->
+      <div class="flex items-end gap-0.5 h-3.5 px-2 py-0.5 bg-white/5 rounded border border-white/10" title="实时 WebGL 渲染管线脉搏">
+        <div class="eq-bar" style="animation-duration:0.6s"></div>
+        <div class="eq-bar" style="animation-duration:0.9s; background:#38bdf8"></div>
+        <div class="eq-bar" style="animation-duration:0.5s"></div>
+        <div class="eq-bar" style="animation-duration:0.75s; background:#34d399"></div>
+        <div class="eq-bar" style="animation-duration:0.65s"></div>
+      </div>
     </div>
     <div class="flex items-center gap-2.5 text-xs font-mono">
       <button data-action="open-showreel" class="px-3 py-1 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 text-slate-200 text-[11px] transition flex items-center gap-1">
-        <span>🎬 序幕介绍 (Intro)</span>
+        <span>🎬 序幕 (Intro)</span>
       </button>
-      <div class="bg-[#101522] border border-white/10 rounded-full px-3 py-1 flex items-center gap-2">
-        <span id="telemetry-dot" class="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
-        <span id="top-active-name" class="text-white font-bold text-[11px]">INITIALIZING...</span>
-      </div>
+      <button data-action="toggle-orbit" id="btn-auto-orbit" class="px-3 py-1 rounded-full bg-emerald-500/20 border border-emerald-400/40 text-emerald-300 text-[11px] font-bold transition flex items-center gap-1.5">
+        <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
+        <span>🔄 动态转台: ON</span>
+      </button>
       <button data-action="screenshot" class="px-3 py-1 rounded-full bg-sky-500/15 hover:bg-sky-500/30 border border-sky-500/40 text-sky-300 text-[11px] font-bold transition">
         📸 截图导出
       </button>
@@ -248,42 +306,61 @@
     </div>
   </header>
 
-  <main class="flex-1 flex overflow-hidden">
+  <main class="flex-1 flex overflow-hidden relative z-10">
 
-    <!-- 左栏：Spotlight 聚光灯多模型矩阵 -->
-    <section class="w-80 border-r border-white/10 bg-[#080b11]/90 flex flex-col justify-between shrink-0 z-10">
+    <!-- 左栏：毛玻璃透景多模型矩阵 -->
+    <section id="workbench-left" class="w-80 border-r border-white/10 bg-[#070a12]/60 backdrop-blur-md flex flex-col justify-between shrink-0 z-10">
       <div class="p-3.5 border-b border-white/10 flex items-center justify-between">
         <span class="text-[11px] font-bold text-slate-200 font-header tracking-wider uppercase">作品矩阵 (Asset Matrix)</span>
         <span id="gallery-count" class="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-orange-400 font-mono"></span>
       </div>
       <div id="asset-list-container" class="flex-1 overflow-y-auto p-3 space-y-2.5"></div>
-      <div class="p-3.5 border-t border-white/10 bg-[#0b0f18] space-y-2 shrink-0">
+      <div class="p-3.5 border-t border-white/10 bg-[#090d16]/80 space-y-2 shrink-0">
         <div class="text-[10px] font-bold text-orange-400 font-header uppercase">+ 接入你的 Sketchfab 资产</div>
-        <input id="custom-model-title" type="text" placeholder="作品名 (留空自动读取官方标题)" class="w-full bg-[#121826] border border-white/10 rounded px-2.5 py-1.5 text-xs text-white outline-none" />
+        <input id="custom-model-title" type="text" placeholder="作品名 (留空自动读取官方标题)" class="w-full bg-[#121826]/90 border border-white/10 rounded px-2.5 py-1.5 text-xs text-white outline-none" />
         <div class="flex gap-1.5">
-          <input id="custom-model-uid" type="text" placeholder="粘贴 Sketchfab 链接或 UID..." class="flex-1 bg-[#121826] border border-white/10 rounded px-2.5 py-1.5 text-[11px] text-white outline-none font-mono" />
+          <input id="custom-model-uid" type="text" placeholder="粘贴 Sketchfab 链接或 UID..." class="flex-1 bg-[#121826]/90 border border-white/10 rounded px-2.5 py-1.5 text-[11px] text-white outline-none font-mono" />
           <button data-action="add-custom" class="px-3 py-1.5 bg-orange-500 hover:bg-orange-400 text-black rounded text-xs font-bold transition">载入</button>
         </div>
       </div>
     </section>
 
-    <!-- 中栏：唯一焦点 3D 视口 + 工业级后处理矩阵 -->
-    <section class="flex-1 flex flex-col relative bg-[#04060a]">
-      <div class="h-12 border-b border-white/10 bg-[#0b0f17] px-4 flex items-center justify-between z-10 shrink-0 gap-2 overflow-x-auto">
+    <!-- 中栏：全透明 3D 视口（底层带旋转全息雷达环 + 激光扫描线 + 粒子网） -->
+    <section id="workbench-center" class="flex-1 flex flex-col relative bg-transparent">
+      <div class="h-12 border-b border-white/10 bg-[#090d16]/75 backdrop-blur-md px-4 flex items-center justify-between z-10 shrink-0 gap-2 overflow-x-auto">
         <div id="shader-toolbar" class="flex items-center gap-1 text-[11px] shrink-0"></div>
         <div id="postfx-toolbar" class="flex items-center gap-1 shrink-0"></div>
       </div>
 
-      <div class="flex-1 relative w-full bg-[#05070c] overflow-hidden">
+      <div class="flex-1 relative w-full overflow-hidden">
+        <!-- 激光扫描线 -->
+        <div class="viewport-laser-line"></div>
+
+        <!-- 3D 模型底层的动态全息旋转刻度星环 (Holographic HUD Rings) -->
+        <div class="absolute inset-0 flex items-center justify-center pointer-events-none z-0 opacity-35">
+          <svg viewBox="0 0 500 500" class="w-[460px] h-[460px] max-w-[85%] max-h-[85%]">
+            <g class="reticle-cw">
+              <circle cx="250" cy="250" r="220" fill="none" stroke="#f5792a" stroke-width="1" stroke-dasharray="6 14 28 14" />
+              <circle cx="250" cy="250" r="195" fill="none" stroke="#38bdf8" stroke-width="0.7" stroke-dasharray="2 8" />
+              <path d="M 250 15 L 250 35 M 250 465 L 250 485 M 15 250 L 35 250 M 465 250 L 485 250" stroke="#f5792a" stroke-width="2" />
+            </g>
+            <g class="reticle-ccw">
+              <circle cx="250" cy="250" r="160" fill="none" stroke="#38bdf8" stroke-width="1.2" stroke-dasharray="40 20 10 20" />
+              <polygon points="250,78 256,88 244,88" fill="#38bdf8" />
+              <polygon points="250,422 256,412 244,412" fill="#f5792a" />
+            </g>
+          </svg>
+        </div>
+
         <div class="hud-bracket top-3 left-3 border-t-2 border-l-2"></div>
         <div class="hud-bracket top-3 right-3 border-t-2 border-r-2"></div>
         <div class="hud-bracket bottom-3 left-3 border-b-2 border-l-2"></div>
         <div class="hud-bracket bottom-3 right-3 border-b-2 border-r-2"></div>
 
         <div class="absolute top-5 left-5 z-10 pointer-events-none flex flex-col gap-1.5">
-          <div class="bg-[#090d16]/85 border border-white/10 backdrop-blur-md px-3.5 py-2 rounded-lg flex items-center gap-3">
+          <div class="bg-[#090d16]/80 border border-white/10 backdrop-blur-md px-3.5 py-2 rounded-lg flex items-center gap-3">
             <div>
-              <div class="text-[9px] text-slate-400 uppercase font-mono">YAPSHIFT TELEMETRY</div>
+              <div class="text-[9px] text-slate-400 uppercase font-mono">YAPSHIFT LIVE TELEMETRY</div>
               <div id="hud-model-title" class="text-xs font-bold text-white font-header">...</div>
             </div>
             <div class="h-6 w-[1px] bg-white/10"></div>
@@ -297,16 +374,17 @@
           </div>
         </div>
 
-        <div id="loading-overlay" class="absolute inset-0 z-20 bg-[#06080d]/90 backdrop-blur-sm flex flex-col items-center justify-center gap-3 transition-opacity duration-300 opacity-0 pointer-events-none">
+        <div id="loading-overlay" class="absolute inset-0 z-20 bg-[#06080d]/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 transition-opacity duration-300 opacity-0 pointer-events-none">
           <div class="w-10 h-10 border-2 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
           <div id="loading-text" class="text-xs text-orange-300 font-mono tracking-wider">SYNCING SCENE-GRAPH...</div>
         </div>
 
-        <iframe id="sketchfab-viewport-frame" class="w-full h-full border-0" allow="autoplay; fullscreen; xr-spatial-tracking" allowfullscreen></iframe>
+        <!-- 透明背景的 Sketchfab 3D 视口，直接透出底层旋转全息环与动态粒子 -->
+        <iframe id="sketchfab-viewport-frame" class="relative z-10 w-full h-full border-0 bg-transparent" allow="autoplay; fullscreen; xr-spatial-tracking" allowfullscreen></iframe>
       </div>
 
       <!-- 底部双轨控制坞 -->
-      <div class="h-14 border-t border-white/10 bg-[#0b0f17] px-5 flex items-center justify-between gap-4 z-10 shrink-0">
+      <div class="h-14 border-t border-white/10 bg-[#090d16]/80 backdrop-blur-md px-5 flex items-center justify-between gap-4 z-10 shrink-0">
         <div class="flex items-center gap-2.5 flex-1">
           <span id="explode-label-text" class="text-xs font-bold text-white whitespace-nowrap font-header">对称爆炸</span>
           <div class="flex items-center bg-[#121826] p-0.5 rounded border border-white/10 text-[10px] font-mono shrink-0">
@@ -327,9 +405,9 @@
       </div>
     </section>
 
-    <!-- 右栏：作品遥测与 YapShift 个人能力雷达 -->
-    <section class="w-[420px] border-l border-white/10 bg-[#080b12] flex flex-col shrink-0 z-10">
-      <div class="p-2.5 bg-[#0c101a] border-b border-white/10 grid grid-cols-2 gap-2 text-xs font-bold font-header">
+    <!-- 右栏：毛玻璃透景遥测与 YapShift 个人能力雷达 -->
+    <section id="workbench-right" class="w-[420px] border-l border-white/10 bg-[#070a12]/60 backdrop-blur-md flex flex-col shrink-0 z-10">
+      <div class="p-2.5 bg-[#0c101a]/80 border-b border-white/10 grid grid-cols-2 gap-2 text-xs font-bold font-header">
         <button id="tab-btn-model" data-action="switch-tab" data-tab="model" class="py-2 rounded-lg border bg-orange-500/20 border-orange-500/50 text-orange-200">
           🧩 作品遥测与子件诊断
         </button>
@@ -354,22 +432,22 @@
             <span id="telemetry-status-tag" class="text-sky-400 telemetry-scanning"></span>
           </div>
           <div class="grid grid-cols-3 gap-2 text-center">
-            <div class="spotlight-card rounded-xl p-2.5">
-              <div class="text-[9px] text-slate-500">真实三角面 (Tris)</div>
+            <div class="spotlight-card tilt-card rounded-xl p-2.5">
+              <div class="text-[9px] text-slate-400">真实三角面 (Tris)</div>
               <div id="spec-polys" class="text-sm font-bold text-white font-mono mt-0.5"></div>
             </div>
-            <div class="spotlight-card rounded-xl p-2.5">
-              <div class="text-[9px] text-slate-500">真实顶点数 (Verts)</div>
+            <div class="spotlight-card tilt-card rounded-xl p-2.5">
+              <div class="text-[9px] text-slate-400">真实顶点数 (Verts)</div>
               <div id="spec-verts" class="text-sm font-bold text-white font-mono mt-0.5"></div>
             </div>
-            <div class="spotlight-card rounded-xl p-2.5">
-              <div class="text-[9px] text-slate-500">识别子部件数</div>
+            <div class="spotlight-card tilt-card rounded-xl p-2.5">
+              <div class="text-[9px] text-slate-400">识别子部件数</div>
               <div id="spec-mats" class="text-sm font-bold text-emerald-300 font-mono mt-0.5"></div>
             </div>
           </div>
         </div>
 
-        <div class="bg-[#0c111d] border border-sky-500/25 rounded-xl p-3 space-y-2">
+        <div class="bg-[#0c111d]/80 border border-sky-500/25 rounded-xl p-3 space-y-2">
           <div class="flex items-center justify-between">
             <span class="text-[11px] font-bold text-sky-300 font-header uppercase">🌳 场景树子部件诊断器</span>
             <span id="part-strategy-badge" class="text-[9px] px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300 font-mono"></span>
@@ -388,18 +466,16 @@
           <div id="panel-workflow" class="space-y-1.5"></div>
         </div>
 
-        <div class="bg-[#0b0f19] border border-orange-500/25 rounded-xl p-2.5 text-[10px] font-mono">
+        <div class="bg-[#0b0f19]/90 border border-orange-500/25 rounded-xl p-2.5 text-[10px] font-mono">
           <div class="text-orange-400 font-bold mb-0.5">&gt;_ YAPSHIFT ENGINE BUS LOG</div>
           <div id="panel-api-log" class="text-emerald-300/90 truncate"></div>
         </div>
       </div>
 
-      <!-- YapShift 个人能力雷达面板 -->
       <div id="tab-panel-profile" class="flex-1 overflow-y-auto p-5 space-y-5 hidden"></div>
     </section>
   </main>
 
-  <!-- 依次引入解耦后的 3 个独立 JS 模块 -->
   <script src="./config.js"></script>
   <script src="./scene-math.js"></script>
   <script src="./app-engine.js"></script>
