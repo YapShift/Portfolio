@@ -1,22 +1,22 @@
 /**
- * YapShift 专属作品集数据与配置层 (config.js v9.0)
- * 所有 4 个 Sketchfab 模型 UID 均经过实测 100% 在线存活！
+ * YapShift 专属作品集配置层 (config.js)
+ * 已彻底清空所有外部示例，100% 仅包含 YapShift 指定的真实模型资产！
  */
 window.PortfolioConfig = {
-  verifiedV90: true,
+  yapshiftExclusive: true,
   author: {
     name: 'YapShift',
-    tagline: '3D Hard-Surface Modeler · Parametric CAD · Technical Artist',
+    tagline: '3D Hard-Surface Modeler · LOD Optimization · Technical Artist',
     githubUrl: 'https://yapshift.github.io/Portfolio/',
     skills: [
-      { name: 'Blender / Hard-Surface 建模', pct: 96, gradient: 'from-orange-500 to-amber-300', text: 'text-orange-400' },
-      { name: 'OpenSCAD 参数化机械工程', pct: 94, gradient: 'from-sky-500 to-cyan-300', text: 'text-sky-400' },
-      { name: 'Substance 3D Painter / PBR', pct: 90, gradient: 'from-emerald-500 to-teal-300', text: 'text-emerald-400' },
-      { name: 'WebGL / Sketchfab API 解耦架构', pct: 88, gradient: 'from-purple-500 to-pink-400', text: 'text-purple-400' }
+      { name: 'Hard-Surface 机械结构建模 (Suspension/CAD)', pct: 96, gradient: 'from-orange-500 to-amber-300', text: 'text-orange-400' },
+      { name: '游戏级多级 LOD 拓扑减面与烘焙', pct: 95, gradient: 'from-sky-500 to-cyan-300', text: 'text-sky-400' },
+      { name: '风格化雕刻与 PBR 材质表现 (Stylized/PBR)', pct: 92, gradient: 'from-emerald-500 to-teal-300', text: 'text-emerald-400' },
+      { name: 'WebGL / Sketchfab API 实时交互管线', pct: 88, gradient: 'from-purple-500 to-pink-400', text: 'text-purple-400' }
     ],
     milestones: [
-      { title: '🛠️ 模块化 3D 打印机挤出头总成', badge: 'YapShift 主导研发', tags: ['MGN12H 线性导轨适配', 'BMG 挤出机集成', 'OpenSCAD 全参数化'] },
-      { title: '🤖 JK AI 智能教育交互系统', badge: '独立全栈开发', tags: ['SPM 知识图谱结构化', '双语实时转译', 'Web 交互前端'] }
+      { title: '🛠️ 机械悬挂系统与模块化 3D 打印结构研发', badge: 'YapShift 原创工程', tags: ['机械悬挂公差配合', 'MGN12H / BMG 模块化', 'OpenSCAD & Blender'] },
+      { title: '🪨 游戏引擎 5 级 LOD 资产优化管线与 JK AI 系统', badge: 'Technical Art', tags: ['5-Level LOD 减面管线', '法线烘焙零接缝', 'Web 交互前端'] }
     ]
   },
 
@@ -36,77 +36,44 @@ window.PortfolioConfig = {
     { id: 'cinema',  label: '🎬 电影胶片' }
   ],
 
+  // 仅保留你发出的 2 个专属模型链接！
   assets: [
     {
-      id: 'retro-boombox',
-      title: '80年代复古重低音手提音响 (BoomBox)',
-      category: 'PROP ASSET // HIGH-DETAIL',
-      roleBadge: 'YapShift 制作：微观网罩 + 复古做旧',
-      uid: 'd5c58960ea5446008f1ebfe7d612f0fb',
-      highlights: ['✦ SSAO 缝隙立体阴影', '✦ 4K 纹理锐化滤镜', '✦ X-Ray 幽灵内腔透视'],
+      id: 'yapshift-suspention',
+      title: '机械悬挂系统总成 (Suspention Assembly)',
+      category: 'MECHANICAL // HARD-SURFACE',
+      roleBadge: 'YapShift 原创：机械结构建模 + 装配配合',
+      uid: '08632550c5604444a14b53dc339b6589',
+      sourceUrl: 'https://sketchfab.com/3d-models/suspention-08632550c5604444a14b53dc339b6589',
+      highlights: ['✦ 避震弹簧与摆臂精密配合', '✦ 360° 零漂移对称爆炸拆解', '✦ X-Ray 幽灵内腔透视'],
       roles: [
-        { name: '微观细节建模', pct: 40, color: 'bg-orange-500', text: 'text-orange-400' },
-        { name: '拉丝电镀材质', pct: 40, color: 'bg-sky-400', text: 'text-sky-400' },
-        { name: '烘焙与优化', pct: 20, color: 'bg-emerald-400', text: 'text-emerald-400' }
+        { name: '硬表面机械结构', pct: 55, color: 'bg-orange-500', text: 'text-orange-400' },
+        { name: '组件拆分与拓扑', pct: 25, color: 'bg-sky-400', text: 'text-sky-400' },
+        { name: '金属PBR材质', pct: 20, color: 'bg-emerald-400', text: 'text-emerald-400' }
       ],
       workflow: [
-        { step: 'STEP 01', title: 'X-Ray 幽灵半透明内腔透视', tag: '开启X-Ray', action: 'xray', desc: '将外壳切换为 28% AlphaBlend 半透明态，直视内部结构。' },
-        { step: 'STEP 02', title: 'SSAO 环境光遮蔽 + 4K 锐化', tag: 'SSAO+锐化', action: 'ssaoSharpen', desc: '强化扬声器网罩孔洞的接触阴影与贴纸边缘锐度。' },
-        { step: 'STEP 03', title: '拓扑线框与材质镜面测试', tag: '镜面反射', action: 'chrome', desc: '重写材质为镜面铬金，检验烘焙法线细节。' }
+        { step: 'STEP 01', title: '悬挂组件 360° 零漂移爆炸拆解', tag: '炸开 65%', action: 'explode65', desc: '将避震器、螺旋弹簧、控制臂与轴承座沿中心对称向外推开，展示内部连接关系。' },
+        { step: 'STEP 02', title: 'X-Ray 幽灵半透明内腔透视', tag: '开启X-Ray', action: 'xray', desc: '将外部机械结构切换为 28% 半透明态，无需拆解即可直视内部活塞杆与轴套配合。' },
+        { step: 'STEP 03', title: '硬表面机械布线与一键复位', tag: '查看线框', action: 'wire', desc: '开启橙色拓扑线框检视弹簧与摆臂网格密度，或点击 0% 一键收合全部零件。' }
       ]
     },
     {
-      id: 'mech-robot-assy',
-      title: '多关节重工机械总成 (Multi-Part Mech)',
-      category: 'PARAMETRIC CAD // MULTI-PART',
-      roleBadge: 'YapShift 主导：多部件层级 + 爆炸拆解',
-      uid: '63462c90432a47a4b120e127711284e1',
-      highlights: ['✦ 多子件独立矩阵节点', '✦ 360° 零漂移对称爆炸', '✦ 支持单零件点击抽离'],
+      id: 'yapshift-stylized-rock-lod',
+      title: '风格化岩石 5 级 LOD 预览 (Stylized Rock - 5 Versions)',
+      category: 'GAME OPTIMIZATION // 5-LEVEL LOD',
+      roleBadge: 'YapShift 原创：高模雕刻 + 5级LOD减面烘焙',
+      uid: 'f9963591aa36459b9837b7a9ca411438',
+      sourceUrl: 'https://sketchfab.com/3d-models/stylized-rock-lod-preview-5-versions-f9963591aa36459b9837b7a9ca411438',
+      highlights: ['✦ 5 级 LOD 阶梯减面对比', '✦ 极低面数保持高模法线剪影', '✦ 风格化边缘磨损手绘质感'],
       roles: [
-        { name: '参数化结构', pct: 55, color: 'bg-orange-500', text: 'text-orange-400' },
-        { name: '装配体拆件', pct: 30, color: 'bg-sky-400', text: 'text-sky-400' },
-        { name: '工业材质设定', pct: 15, color: 'bg-emerald-400', text: 'text-emerald-400' }
+        { name: '造型雕刻与切面', pct: 40, color: 'bg-orange-500', text: 'text-orange-400' },
+        { name: '5级LOD拓扑减面', pct: 40, color: 'bg-sky-400', text: 'text-sky-400' },
+        { name: '法线烘焙与贴图', pct: 20, color: 'bg-emerald-400', text: 'text-emerald-400' }
       ],
       workflow: [
-        { step: 'STEP 01', title: '360° 零均值中心对称爆炸', tag: '炸开 65%', action: 'explode65', desc: '递归穿透 Group 层级提取全部子部件向四周对称散开。' },
-        { step: 'STEP 02', title: '开启夜航 Bloom + 电影后期', tag: '电影后期', action: 'cinema', desc: '激活 Bloom 辉光、光学色差与电影暗角。' },
-        { step: 'STEP 03', title: '装配体一键归位收合', tag: '收合 0%', action: 'explode0', desc: '将所有拆解开的子零件精准复位至初始坐标。' }
-      ]
-    },
-    {
-      id: 'damaged-helmet',
-      title: '科幻重装战损头盔 (Damaged Helmet)',
-      category: 'GAME ASSET // HARD SURFACE',
-      roleBadge: 'YapShift 负责：高模雕刻 + PBR 烘焙',
-      uid: 'b89009525e024c389b2d3c0834d2a49b',
-      highlights: ['✦ 四边面卡线倒角', '✦ 360° 光影旋转检视', '✦ 多层金属氧化战损'],
-      roles: [
-        { name: '硬表面建模', pct: 45, color: 'bg-orange-500', text: 'text-orange-400' },
-        { name: 'UV与法线烘焙', pct: 25, color: 'bg-sky-400', text: 'text-sky-400' },
-        { name: 'Substance贴图', pct: 30, color: 'bg-emerald-400', text: 'text-emerald-400' }
-      ],
-      workflow: [
-        { step: 'STEP 01', title: '中模硬表面造型检视', tag: '雕塑白模', action: 'clay', desc: '屏蔽贴图干扰，直接检视曲面造型与倒角高光连续性。' },
-        { step: 'STEP 02', title: '游戏级低模拓扑布线', tag: '拓扑线框', action: 'wire', desc: '开启橙色拓扑线框，查看 1.5 万面游戏级低模排布。' },
-        { step: 'STEP 03', title: '金属度与镜面反射测试', tag: '镜面铬金', action: 'chrome', desc: '配合底部【光影旋转】滑块检验高光流向。' }
-      ]
-    },
-    {
-      id: 'vintage-camera',
-      title: '精密光学机械相机 (Optical Camera)',
-      category: 'PRECISION CAD // MULTI-MESH',
-      roleBadge: 'YapShift 制作：精密镜头组 + 皮革金属PBR',
-      uid: 'd960c9a5e6e04200a581398412f9775e',
-      highlights: ['✦ 多层光学玻璃折射', '✦ 机械拨盘精细刻度', '✦ 完整子部件拆解'],
-      roles: [
-        { name: '精密机械建模', pct: 50, color: 'bg-orange-500', text: 'text-orange-400' },
-        { name: '光学材质表现', pct: 30, color: 'bg-sky-400', text: 'text-sky-400' },
-        { name: '组件拆分', pct: 20, color: 'bg-emerald-400', text: 'text-emerald-400' }
-      ],
-      workflow: [
-        { step: 'STEP 01', title: '镜头模组与机身对称拆解', tag: '炸开 65%', action: 'explode65', desc: '分离光学镜头组与金属机身部件。' },
-        { step: 'STEP 02', title: '无光影 Albedo 纯色贴图检视', tag: '纯色贴图', action: 'albedo', desc: '剥离光影干扰，纯粹展示蒙皮纹理与刻度贴图。' },
-        { step: 'STEP 03', title: '硬表面网格拓扑线框检视', tag: '拓扑线框', action: 'wire', desc: '查看拨盘与镜筒的高精度四边面布线。' }
+        { step: 'STEP 01', title: '5 个版本 LOD 网格密度直观对比', tag: '开启线框对比', action: 'wire', desc: '一键叠加高亮线框，直观对比从高精版本到极简远景 LOD 版本的三角面递减功底！' },
+        { step: 'STEP 02', title: '风格化岩石块面切角雕塑检视', tag: '切换雕塑白模', action: 'clay', desc: '屏蔽颜色贴图，检验 5 个不同 LOD 版本在纯光影下的法线凹凸保持度与轮廓一致性。' },
+        { step: 'STEP 03', title: '无光影 Albedo 纯色手绘贴图检视', tag: '纯色贴图', action: 'albedo', desc: '剥离环境光与阴影，纯粹检视岩石边缘高光描绘与色彩冷暖变化。' }
       ]
     }
   ]
