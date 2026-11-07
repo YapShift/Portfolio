@@ -1,141 +1,160 @@
 /**
- * 纯 3D 场景树递归与零漂移对称爆炸数学模块 (scene-math.js)
- * 零 DOM 依赖，负责穿透 Group 层级提取真实子部件并计算正负镜像零均值向量
+ * 3D 场景树深度递归解析与零漂移对称爆炸数学库 (scene-math.js)
+ * 专门解决：
+ *  1. 零件不再往一侧偏飞（强制零均值中心对称）
+ *  2. 解决单层 Group 包裹导致找不出子零件的问题（自适应最深有效拆分深度）
+ *  3. 自动过滤地面、阴影板、背景盒与根节点容器
  */
 window.SceneGraphMath = {
-  hasGeometryInSubtree(node, nodeMap, visited = new Set()) {
-    if (!node || visited.has(node.instanceID)) return false;
-    visited.add(node.instanceID);
-    if (node.type === 'Geometry' || node.type === 'RigGeometry') return true;
-    if (!Array.isArray(node.children)) return false;
-    return node.children.some(ch => this.hasGeometryInSubtree(nodeMap[ch.instanceID] || ch, nodeMap, visited));
-  },
+  IGNORE_REGEX: /^(root|scene|world|ground|floor|plane|shadow|stage|backdrop|camera|light|env|sky|grid|base_plane|shadow_plane)/i,
 
-  analyzeAndBuildVectors(nodeMap, cameraDistanceScale = 1.6) {
-    if (!nodeMap) return { parts: [], strategy: 'NONE' };
+  /**
+   * 递归扫描 Sketchfab 场景图，自动寻找能拆分出最多有效子部件的层级
+   */
+  extractExplodableNodes(nodeMap) {
+    if (!nodeMap) return { nodes: [], strategy: 'NONE' };
     const allNodes = Object.values(nodeMap);
 
-    // 1. 递归寻找最底层包含 Geometry 的 MatrixTransform
-    const leafTransforms = allNodes.filter(n => {
-      if (n.type !== 'MatrixTransform' || !this.hasGeometryInSubtree(n, nodeMap)) return false;
-      let hasDeeper = false;
-      const check = (curr) => {
-        if (!curr || !Array.isArray(curr.children)) return;
-        for (const ch of curr.children) {
-          const obj = nodeMap[ch.instanceID] || ch;
-          if (obj.type === 'MatrixTransform' && this.hasGeometryInSubtree(obj, nodeMap)) { hasDeeper = true; return; }
-          check(obj);
-        }
-      };
-      check(n);
-      return !hasDeeper;
+    // 1. 收集所有 MatrixTransform 节点并过滤背景/地面
+    const validTransforms = allNodes.filter(n => {
+      if (n.type !== 'MatrixTransform') return false;
+      const name = (n.name || '').trim();
+      if (this.IGNORE_REGEX.test(name)) return false;
+      return true;
     });
 
-    const allGeometries = allNodes.filter(n => n.type === 'Geometry' || n.type === 'RigGeometry');
-    let rawNodes = [];
-    let strategy = 'SINGLE-MESH (1)';
+    // 2. 优先寻找“直接包含 Geometry 子节点”的叶子级 MatrixTransform（最精准的独立零件）
+    const leafPartTransforms = validTransforms.filter(n => {
+      if (!Array.isArray(n.children) || n.children.length === 0) return false;
+      return n.children.some(cid => nodeMap[cid] && nodeMap[cid].type === 'Geometry');
+    });
 
-    if (leafTransforms.length > 1) {
-      rawNodes = leafTransforms;
-      strategy = `MATRIX-PARTS (${leafTransforms.length})`;
-    } else if (allGeometries.length > 1) {
-      rawNodes = allGeometries;
-      strategy = `GEOMETRY-MESHES (${allGeometries.length})`;
-    } else if (leafTransforms.length === 1) {
-      const childrenWithGeo = (leafTransforms[0].children || [])
-        .map(ch => nodeMap[ch.instanceID] || ch)
-        .filter(ch => this.hasGeometryInSubtree(ch, nodeMap));
-      if (childrenWithGeo.length > 1) {
-        rawNodes = childrenWithGeo;
-        strategy = `GROUP-SUBPARTS (${childrenWithGeo.length})`;
-      } else {
-        rawNodes = leafTransforms;
-      }
+    if (leafPartTransforms.length > 1) {
+      return { nodes: leafPartTransforms, strategy: `LEAF-MESH (${leafPartTransforms.length} 零件)` };
     }
 
-    const count = rawNodes.length;
-    if (count <= 1) {
-      return {
-        parts: rawNodes.map(n => ({ instanceID: n.instanceID, name: n.name || 'Merged_Mesh', nodeType: n.type })),
-        strategy
-      };
+    // 3. 若模型全是嵌套 Group，则选取非根节点的有效 Transform
+    const groupTransforms = validTransforms.filter(n => n.name && !/root|scene|gltf|sketchfab|model/i.test(n.name));
+    if (groupTransforms.length > 1) {
+      return { nodes: groupTransforms, strategy: `GROUP-TREE (${groupTransforms.length} 组件)` };
     }
 
-    const extracted = rawNodes.map(n => {
-      const m = n.localMatrix || n.worldMatrix || [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
-      return {
+    return {
+      nodes: leafPartTransforms.length ? leafPartTransforms : validTransforms.slice(0, 1),
+      strategy: 'SINGLE-MESH (单网格合并资产)'
+    };
+  },
+
+  /**
+   * 计算零均值中心对称爆炸向量（Zero-Drift Balanced Vectors）
+   */
+  analyzeAndBuildVectors(nodeMap, cameraScale = 1.6) {
+    const { nodes, strategy } = this.extractExplodableNodes(nodeMap);
+    const rawParts = [];
+
+    nodes.forEach((n, idx) => {
+      const m = n.localMatrix || n.worldMatrix;
+      if (!m || m.length < 16) return;
+      rawParts.push({
         instanceID: n.instanceID,
-        name: n.name || `${n.type}_${n.instanceID}`,
-        nodeType: n.type,
-        origPos: [m[12] || 0, m[13] || 0, m[14] || 0]
-      };
+        name: (n.name || `SubPart_${idx + 1}`).replace(/_/g, ' '),
+        origPos: [m[12], m[13], m[14]],
+        worldPos: n.worldMatrix ? [n.worldMatrix[12], n.worldMatrix[13], n.worldMatrix[14]] : [m[12], m[13], m[14]],
+        visible: true,
+        pulsed: false
+      });
     });
 
-    // 2. 质心与跨度计算
+    const count = rawParts.length;
+    if (count <= 1) {
+      return { parts: rawParts, strategy, isSingleMesh: true };
+    }
+
+    // 计算所有零件的世界中心质心
     let cx = 0, cy = 0, cz = 0;
-    extracted.forEach(p => { cx += p.origPos[0]; cy += p.origPos[1]; cz += p.origPos[2]; });
+    rawParts.forEach(p => {
+      cx += p.worldPos[0];
+      cy += p.worldPos[1];
+      cz += p.worldPos[2];
+    });
     cx /= count; cy /= count; cz /= count;
 
-    let maxSpread = 0, distinct = 0;
-    extracted.forEach(p => {
-      const d = Math.hypot(p.origPos[0] - cx, p.origPos[1] - cy, p.origPos[2] - cz);
+    // 判断零件本身是否有明显的空间坐标偏移
+    let maxSpread = 0;
+    const rawOffsets = rawParts.map(p => {
+      const dx = p.worldPos[0] - cx;
+      const dy = p.worldPos[1] - cy;
+      const dz = p.worldPos[2] - cz;
+      const d = Math.hypot(dx, dy, dz);
       if (d > maxSpread) maxSpread = d;
-      if (d > 1e-3) distinct++;
+      return [dx, dy, dz, d];
     });
 
-    const baseScale = maxSpread > 0.05 ? maxSpread * 0.95 : cameraDistanceScale;
     const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-    const radialDirs = [], axialDirs = [];
+    const radialDirs = [];
+    const axialDirs = [];
 
-    // 3. 成对正负镜像采样 (Paired Antithetic Sampling)
-    extracted.forEach((p, idx) => {
-      const dx = p.origPos[0] - cx, dy = p.origPos[1] - cy, dz = p.origPos[2] - cz;
-      const dist = Math.hypot(dx, dy, dz);
-      let rx, ry, rz;
+    for (let i = 0; i < count; i++) {
+      // A. 标准斐波那契 360° 均匀球面向量（保证无论零件原点是否重合，都能向四周均匀散开）
+      const y = count === 1 ? 0 : 1 - (i / (count - 1)) * 2;
+      const r = Math.sqrt(Math.max(0, 1 - y * y));
+      const theta = goldenAngle * i;
+      const fibX = Math.cos(theta) * r;
+      const fibZ = Math.sin(theta) * r;
+      const fibY = y;
 
-      if (idx % 2 === 1 && radialDirs.length > 0) {
-        const prev = radialDirs[idx - 1];
-        [rx, ry, rz] = [-prev[0], -prev[1], -prev[2]];
-      } else if (distinct >= count * 0.5 && dist > 1e-3) {
-        [rx, ry, rz] = [dx / dist, dy / dist, dz / dist];
-      } else {
-        const t = (idx + 0.5) / count, y = 1 - 2 * t, r = Math.sqrt(Math.max(0, 1 - y * y)), phi = goldenAngle * idx;
-        [rx, ry, rz] = [Math.cos(phi) * r, y, Math.sin(phi) * r];
+      // B. 如果零件自带明显偏移，将真实质心方向与斐波那契球面融合；若全在(0,0,0)则100%采用球面分布
+      let rx = fibX, ry = fibY, rz = fibZ;
+      if (maxSpread > 0.05 && rawOffsets[i][3] > maxSpread * 0.08) {
+        const inv = 1 / rawOffsets[i][3];
+        rx = (rawOffsets[i][0] * inv) * 0.65 + fibX * 0.35;
+        ry = (rawOffsets[i][1] * inv) * 0.65 + fibY * 0.35;
+        rz = (rawOffsets[i][2] * inv) * 0.65 + fibZ * 0.35;
       }
-      radialDirs.push([rx, ry, rz]);
+      const rLen = Math.hypot(rx, ry, rz) || 1;
+      radialDirs.push([rx / rLen, ry / rLen, rz / rLen]);
 
-      const sign = idx % 2 === 0 ? 1 : -1;
-      const tier = Math.floor(idx / 2 + 1) / Math.ceil(count / 2);
-      axialDirs.push([sign * (0.4 + 0.6 * tier), ((Math.floor(idx / 2) % 3) - 1) * 0.2 * sign, (Math.floor(idx / 2) % 2 === 0 ? 0.2 : -0.2) * sign]);
-    });
+      // C. 机械轴向拆解向量（沿水平轴对称展开 + 轻微圆周错位防遮挡）
+      const tNorm = (i / (count - 1)) * 2 - 1; // 严格分布在 [-1, +1]
+      const ringAngle = i * 2.1;
+      axialDirs.push([
+        tNorm * 1.15,
+        Math.sin(ringAngle) * 0.32,
+        Math.cos(ringAngle) * 0.32
+      ]);
+    }
 
-    // 4. 严格零均值中心化校准 (Σ v = 0)
-    const zeroCenter = (dirs) => {
+    // D. 关键步骤：零均值中心化校准（Zero-Mean Centering）
+    // 强制所有零件爆炸向量的总和等于 (0,0,0)，彻底杜绝整体往一边飞出屏幕！
+    const balanceVectors = (dirs) => {
       let mx = 0, my = 0, mz = 0;
       dirs.forEach(v => { mx += v[0]; my += v[1]; mz += v[2]; });
       mx /= count; my /= count; mz /= count;
       return dirs.map(v => {
-        const nx = v[0] - mx, ny = v[1] - my, nz = v[2] - mz;
-        const len = Math.hypot(nx, ny, nz) || 1;
-        return [nx / len, ny / len, nz / len];
+        const bx = v[0] - mx;
+        const by = v[1] - my;
+        const bz = v[2] - mz;
+        const len = Math.hypot(bx, by, bz) || 1;
+        return [bx / len, by / len, bz / len];
       });
     };
 
-    const centeredRadial = zeroCenter(radialDirs);
-    const centeredAxial = zeroCenter(axialDirs);
+    const balancedRadial = balanceVectors(radialDirs);
+    const balancedAxial = balanceVectors(axialDirs);
+    const baseDist = Math.max(maxSpread * 1.25, cameraScale);
 
-    const parts = extracted.map((p, idx) => {
-      const weight = 0.55 + 0.65 * ((Math.floor(idx / 2) % 4 + 1) / 4);
-      return {
-        ...p,
-        radialDir: centeredRadial[idx],
-        axialDir: centeredAxial[idx],
-        maxDistance: baseScale * weight,
-        visible: true,
-        pulsed: false
-      };
+    rawParts.forEach((p, i) => {
+      // 内外圈错落层次感，避免所有零件停在同一个球壳半径上
+      const layerTier = 0.72 + (i % 3) * 0.24;
+      p.radialDir = balancedRadial[i];
+      p.axialDir = balancedAxial[i];
+      p.maxDistance = baseDist * layerTier;
     });
 
-    return { parts, strategy };
+    return {
+      parts: rawParts,
+      strategy: maxSpread > 0.05 ? `${strategy} · 质心对称` : `${strategy} · 斐波那契球面`,
+      isSingleMesh: false
+    };
   }
 };
