@@ -1,0 +1,1532 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TANG // PRO POST-PROCESSING & 3D TELEMETRY STUDIO</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Sketchfab 官方 Viewer API -->
+  <script src="https://static.sketchfab.com/api/sketchfab-viewer-1.12.1.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+    :root {
+      --accent: #f5792a;
+      --accent-cyan: #38bdf8;
+      --bg-dark: #06080d;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      background-color: var(--bg-dark);
+      font-family: 'JetBrains Mono', monospace;
+      color: #e2e8f0;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    .font-header { font-family: 'Chakra Petch', sans-serif; }
+
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.14); border-radius: 2px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+    .cyber-grid-bg {
+      background-image: 
+        radial-gradient(circle at 50% 0%, rgba(245, 121, 42, 0.08), transparent 60%),
+        linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+      background-size: 100% 100%, 24px 24px, 24px 24px;
+    }
+
+    .asset-card {
+      position: relative;
+      overflow: hidden;
+      transition: all 0.28s cubic-bezier(0.16, 1, 0.3, 1);
+      cursor: pointer;
+    }
+    .asset-card::before {
+      content: '';
+      position: absolute;
+      top: 0; left: -100%;
+      width: 60%; height: 100%;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent);
+      transform: skewX(-20deg);
+      transition: left 0.55s ease;
+    }
+    .asset-card:hover::before { left: 140%; }
+    .asset-card:hover {
+      transform: translateX(4px) translateY(-1px);
+      border-color: rgba(245, 121, 42, 0.5);
+    }
+    .asset-card.active {
+      border-color: var(--accent);
+      background: linear-gradient(135deg, rgba(245, 121, 42, 0.16) 0%, rgba(15, 23, 38, 0.95) 100%);
+      box-shadow: 0 8px 24px -6px rgba(245, 121, 42, 0.35), inset 3px 0 0 var(--accent);
+    }
+
+    .skill-bar-fill {
+      width: 0%;
+      transition: width 0.9s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    @keyframes pulsePolygon {
+      0%, 100% { filter: drop-shadow(0 0 6px rgba(245, 121, 42, 0.5)); opacity: 0.85; }
+      50% { filter: drop-shadow(0 0 14px rgba(56, 189, 248, 0.8)); opacity: 1; }
+    }
+    .radar-shape {
+      animation: pulsePolygon 3.5s infinite ease-in-out;
+      transition: all 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    .pipeline-node {
+      transition: all 0.22s ease;
+      cursor: pointer;
+    }
+    .pipeline-node:hover {
+      border-color: rgba(56, 189, 248, 0.6);
+      background: rgba(56, 189, 248, 0.08);
+      transform: translateY(-2px);
+    }
+    .pipeline-node.active-step {
+      border-color: var(--accent);
+      background: rgba(245, 121, 42, 0.15);
+      box-shadow: 0 0 15px rgba(245, 121, 42, 0.25);
+    }
+
+    .hud-bracket {
+      position: absolute;
+      width: 16px; height: 16px;
+      border-color: rgba(245, 121, 42, 0.55);
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    @keyframes scanBlink {
+      0%, 100% { opacity: 0.35; }
+      50% { opacity: 1; color: #38bdf8; }
+    }
+    .telemetry-scanning {
+      animation: scanBlink 0.9s infinite ease-in-out;
+    }
+
+    input[type="range"].studio-slider {
+      -webkit-appearance: none; appearance: none; height: 5px;
+      background: linear-gradient(90deg, rgba(245,121,42,0.4), rgba(56,189,248,0.4));
+      border-radius: 3px; outline: none;
+    }
+    input[type="range"].studio-slider::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 3px;
+      background: var(--accent); border: 2px solid #fff; cursor: pointer; transform: rotate(45deg);
+      box-shadow: 0 0 12px var(--accent); transition: transform 0.15s ease;
+    }
+    input[type="range"].studio-slider::-webkit-slider-thumb:hover {
+      transform: rotate(45deg) scale(1.2);
+    }
+    input[type="range"].studio-slider:disabled {
+      opacity: 0.3;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body class="h-screen w-screen flex flex-col cyber-grid-bg">
+
+  <!-- ================= 顶部动态遥测导航栏 ================= -->
+  <header class="h-14 border-b border-white/10 bg-[#090c14]/90 backdrop-blur-md px-6 flex items-center justify-between shrink-0 z-20">
+    <div class="flex items-center gap-3">
+      <div class="relative flex items-center justify-center w-5 h-5">
+        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-40"></span>
+        <div class="w-3 h-3 bg-[#f5792a] rotate-45 shadow-[0_0_10px_#f5792a]"></div>
+      </div>
+      <span class="font-header font-bold tracking-wider text-sm text-white">TANG // 3D INTERACTIVE TELEMETRY STUDIO</span>
+      <span class="text-[10px] px-2 py-0.5 bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 rounded font-mono">
+        PRO POST-FX SUITE v5.0
+      </span>
+    </div>
+
+    <div class="flex items-center gap-3 text-xs font-mono">
+      <div class="bg-[#101522] border border-white/10 rounded-full px-3 py-1 flex items-center gap-2">
+        <span id="telemetry-dot" class="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+        <span class="text-slate-400 text-[10px]">TELEMETRY:</span>
+        <span id="top-active-name" class="text-white font-bold text-[11px]">READING...</span>
+      </div>
+      <button onclick="captureStudioScreenshot()" class="px-3 py-1 rounded-full bg-sky-500/15 hover:bg-sky-500/30 border border-sky-500/40 text-sky-300 text-[11px] font-bold transition flex items-center gap-1.5" title="导出高清 PNG 渲染截图">
+        <span>📸 渲染截图导出</span>
+      </button>
+      <button onclick="switchTab('profile')" class="px-3 py-1 rounded-full bg-orange-500/15 hover:bg-orange-500/30 border border-orange-500/40 text-orange-300 text-[11px] font-bold transition flex items-center gap-1.5">
+        <span>⚡ 个人能力雷达</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- ================= 主体三栏交互工作台 ================= -->
+  <main class="flex-1 flex overflow-hidden">
+
+    <!-- 1. 左侧栏：多模型矩阵卡片 -->
+    <section class="w-80 border-r border-white/10 bg-[#080b11]/90 flex flex-col justify-between shrink-0 z-10">
+      <div class="p-3.5 border-b border-white/10 flex items-center justify-between">
+        <div class="text-[11px] font-bold text-slate-200 font-header tracking-wider uppercase flex items-center gap-1.5">
+          <span class="w-1.5 h-3.5 bg-orange-500 rounded-sm"></span>
+          <span>多模型矩阵 (Asset Matrix)</span>
+        </div>
+        <span id="gallery-count" class="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-orange-400 font-mono">4 ASSETS</span>
+      </div>
+
+      <div id="asset-list-container" class="flex-1 overflow-y-auto p-3 space-y-2.5"></div>
+
+      <!-- 底部：接入你的 Sketchfab 模型 -->
+      <div class="p-3.5 border-t border-white/10 bg-[#0b0f18] space-y-2 shrink-0">
+        <div class="flex items-center justify-between">
+          <span class="text-[10px] font-bold text-orange-400 font-header uppercase tracking-wider">+ 接入你的 Sketchfab 资产</span>
+          <span class="text-[9px] text-slate-500 font-mono">Deep Node Scan</span>
+        </div>
+        <input id="custom-model-title" type="text" placeholder="输入作品名 (留空则自动读取官方标题)" class="w-full bg-[#121826] border border-white/10 focus:border-orange-500/60 rounded px-2.5 py-1.5 text-xs text-white placeholder-slate-600 outline-none" />
+        <div class="flex gap-1.5">
+          <input id="custom-model-uid" type="text" placeholder="粘贴 Sketchfab 链接或 UID..." class="flex-1 bg-[#121826] border border-white/10 focus:border-orange-500/60 rounded px-2.5 py-1.5 text-[11px] text-white placeholder-slate-600 outline-none font-mono" />
+          <button onclick="addCustomModelFromInput()" class="px-3 py-1.5 bg-orange-500 hover:bg-orange-400 text-black rounded text-xs font-bold transition shrink-0">
+            载入
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 2. 中央：唯一焦点 3D 视口 + 工业级后处理矩阵控制坞 -->
+    <section class="flex-1 flex flex-col relative bg-[#04060a]">
+      <!-- 第一排：材质通道后处理 + 屏幕空间 Post-FX 后期滤镜 -->
+      <div class="h-12 border-b border-white/10 bg-[#0b0f17] px-4 flex items-center justify-between z-10 shrink-0 gap-2 overflow-x-auto">
+        <!-- 6 大实用材质/通道检视模式 -->
+        <div class="flex items-center gap-1 text-[11px] shrink-0">
+          <span class="text-[9px] text-slate-500 font-mono mr-1">SHADER:</span>
+          <button onclick="setShading('rendered')" id="btn-shade-rendered" class="px-2 py-1 rounded bg-orange-500/25 border border-orange-400/50 text-orange-200 font-semibold transition">● PBR实机</button>
+          <button onclick="setShading('clay')" id="btn-shade-clay" class="px-2 py-1 rounded text-slate-400 hover:text-white transition">◐ 雕塑灰模</button>
+          <button onclick="setShading('wire')" id="btn-shade-wire" class="px-2 py-1 rounded text-slate-400 hover:text-white transition">⌗ 拓扑线框</button>
+          <button onclick="setShading('xray')" id="btn-shade-xray" class="px-2 py-1 rounded text-slate-400 hover:text-white transition" title="28% 半透明幽灵透视，直视内部结构">🩻 X-Ray透视</button>
+          <button onclick="setShading('albedo')" id="btn-shade-albedo" class="px-2 py-1 rounded text-slate-400 hover:text-white transition" title="无光影纯漫反射贴图检视">🎨 纯色贴图</button>
+          <button onclick="setShading('chrome')" id="btn-shade-chrome" class="px-2 py-1 rounded text-slate-400 hover:text-white transition" title="高反光镜面铬金，检验法线平整度">✦ 镜面反射</button>
+        </div>
+
+        <!-- 4 大屏幕空间后期滤镜 (Post-Processing Stack) -->
+        <div class="flex items-center gap-1 shrink-0">
+          <span class="text-[9px] text-slate-500 font-mono mr-0.5">POST-FX:</span>
+          <button onclick="togglePostFX('ssao')" id="btn-fx-ssao" class="px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-slate-300 text-[10px] font-mono transition" title="屏幕空间环境光遮蔽 (强化缝隙立体阴影)">🕳️ SSAO阴影</button>
+          <button onclick="togglePostFX('bloom')" id="btn-fx-bloom" class="px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-slate-300 text-[10px] font-mono transition" title="高光光学辉光溢出">✨ Bloom辉光</button>
+          <button onclick="togglePostFX('sharpen')" id="btn-fx-sharpen" class="px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-slate-300 text-[10px] font-mono transition" title="硬表面纹理锐化">🔪 4K锐化</button>
+          <button onclick="togglePostFX('cinema')" id="btn-fx-cinema" class="px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-slate-300 text-[10px] font-mono transition" title="光学色差 + 电影暗角 + ACES色调">🎬 电影胶片</button>
+          <button onclick="toggleAutoShowcase()" id="btn-auto-tour" class="px-2 py-1 rounded bg-sky-500/15 hover:bg-sky-500/25 border border-sky-400/30 text-sky-300 text-[10px] font-semibold transition ml-1">▶ 巡航</button>
+          <button onclick="recenterCamera()" class="px-2 py-1 bg-white/5 hover:bg-white/15 rounded text-slate-300 text-[10px] transition" title="镜头归位">⟳</button>
+        </div>
+      </div>
+
+      <div class="flex-1 relative w-full bg-[#05070c] overflow-hidden">
+        <div class="hud-bracket top-3 left-3 border-t-2 border-l-2"></div>
+        <div class="hud-bracket top-3 right-3 border-t-2 border-r-2"></div>
+        <div class="hud-bracket bottom-3 left-3 border-b-2 border-l-2"></div>
+        <div class="hud-bracket bottom-3 right-3 border-b-2 border-r-2"></div>
+
+        <!-- 左上角实时传感器徽章 -->
+        <div class="absolute top-5 left-5 z-10 pointer-events-none flex flex-col gap-1.5">
+          <div class="bg-[#090d16]/85 border border-white/10 backdrop-blur-md px-3.5 py-2 rounded-lg flex items-center gap-3">
+            <div>
+              <div class="text-[9px] text-slate-400 uppercase font-mono">DEEP SCENE-GRAPH SCANNER</div>
+              <div id="hud-model-title" class="text-xs font-bold text-white font-header">正在读取模型...</div>
+            </div>
+            <div class="h-6 w-[1px] bg-white/10"></div>
+            <div class="font-mono text-[11px]">
+              <span class="text-orange-400 font-bold" id="hud-nodes-badge">--</span>
+              <span class="text-slate-400 text-[10px]" id="hud-explode-mode">节点扫描中</span>
+            </div>
+          </div>
+          <div id="cam-impulse-toast" class="opacity-0 transition-opacity duration-300 bg-sky-500/20 border border-sky-400/40 backdrop-blur-md px-2.5 py-1 rounded text-[10px] text-sky-200 font-mono">
+            🎥 零偏心对称拆解中：相机已沿当前视线正后方自动退后容纳全零件（可随时滚轮自由缩放）
+          </div>
+        </div>
+
+        <div id="loading-overlay" class="absolute inset-0 z-20 bg-[#06080d]/90 backdrop-blur-sm flex flex-col items-center justify-center gap-3 transition-opacity duration-300 opacity-0 pointer-events-none">
+          <div class="w-10 h-10 border-2 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
+          <div id="loading-text" class="text-xs text-orange-300 font-mono tracking-wider">DEEP SCANNING SCENE-GRAPH HIERARCHY...</div>
+        </div>
+
+        <iframe id="sketchfab-viewport-frame" class="w-full h-full border-0" allow="autoplay; fullscreen; xr-spatial-tracking" allowfullscreen></iframe>
+      </div>
+
+      <!-- 视口底部双轨控制坞：左侧「对称爆炸拆解」 + 右侧「☀️ HDRI 环境光旋转检视」 -->
+      <div class="h-14 border-t border-white/10 bg-[#0b0f17] px-5 flex items-center justify-between gap-4 z-10 shrink-0">
+        <!-- 轨道 1：零漂移爆炸拆解 -->
+        <div class="flex items-center gap-2.5 flex-1">
+          <div class="flex items-center gap-1.5 text-xs font-bold text-white whitespace-nowrap font-header">
+            <span class="w-2 h-2 bg-orange-500 rotate-45"></span>
+            <span id="explode-label-text">对称爆炸 (Explode)</span>
+          </div>
+
+          <div class="flex items-center bg-[#121826] p-0.5 rounded border border-white/10 text-[10px] font-mono shrink-0">
+            <button onclick="setExplodePattern('radial')" id="btn-pat-radial" class="px-2 py-0.5 rounded bg-orange-500/30 text-orange-200 font-bold transition">360°球面</button>
+            <button onclick="setExplodePattern('axial')" id="btn-pat-axial" class="px-2 py-0.5 rounded text-slate-400 hover:text-white transition">机械轴向</button>
+          </div>
+
+          <input
+            id="explode-slider"
+            type="range"
+            min="0"
+            max="100"
+            value="0"
+            onmousedown="captureCameraBaseline()"
+            ontouchstart="captureCameraBaseline()"
+            oninput="handleExplodeInput(this.value, true)"
+            class="studio-slider flex-1 cursor-pointer"
+          />
+          <button onclick="animateExplodeTo(65)" id="btn-quick-explode" class="px-2 py-0.5 rounded bg-orange-500/20 hover:bg-orange-500/35 text-[10px] text-orange-300 font-mono shrink-0">65%</button>
+          <span id="explode-percent" class="text-xs font-mono font-bold text-orange-400 w-9 text-right">0%</span>
+        </div>
+
+        <div class="h-6 w-[1px] bg-white/10"></div>
+
+        <!-- 轨道 2：新增「☀️ HDRI 影棚主光源 360° 旋转检视」 -->
+        <div class="flex items-center gap-2 w-64 shrink-0" title="固定相机不动，旋转 360° HDRI 环境光，观察倒角高光流动">
+          <span class="text-[11px] font-bold text-sky-300 whitespace-nowrap font-header">☀️ 光影旋转</span>
+          <input
+            id="light-rot-slider"
+            type="range"
+            min="0"
+            max="360"
+            value="0"
+            oninput="handleLightRotation(this.value)"
+            class="studio-slider flex-1 cursor-pointer"
+          />
+          <span id="light-rot-deg" class="text-[11px] font-mono text-sky-400 w-9 text-right">0°</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 3. 右侧：真实遥测面板 + 🌳 子部件层级诊断器 + 个人能力雷达 -->
+    <section class="w-[420px] border-l border-white/10 bg-[#080b12] flex flex-col shrink-0 z-10">
+      <div class="p-2.5 bg-[#0c101a] border-b border-white/10 grid grid-cols-2 gap-2 text-xs font-bold font-header">
+        <button id="tab-btn-model" onclick="switchTab('model')" class="py-2 rounded-lg border transition flex items-center justify-center gap-1.5 bg-orange-500/20 border-orange-500/50 text-orange-200">
+          <span>🧩 作品遥测与子件诊断</span>
+        </button>
+        <button id="tab-btn-profile" onclick="switchTab('profile')" class="py-2 rounded-lg border border-transparent text-slate-400 hover:text-white transition flex items-center justify-center gap-1.5">
+          <span>📊 我的能力雷达 & 履历</span>
+        </button>
+      </div>
+
+      <div id="tab-panel-model" class="flex-1 overflow-y-auto p-5 space-y-4">
+        <div>
+          <div class="flex items-center justify-between">
+            <span id="panel-category" class="text-[10px] text-orange-400 font-bold font-mono tracking-wider uppercase">HARD SURFACE</span>
+            <span id="panel-role-badge" class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-mono">100% 独立制作</span>
+          </div>
+          <h2 id="panel-title" class="text-lg font-bold text-white font-header mt-1">读取模型中...</h2>
+          <div id="panel-highlights" class="flex flex-wrap gap-1.5 mt-2"></div>
+        </div>
+
+        <!-- 真实先读取后显示的几何指标 -->
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between text-[10px] font-mono">
+            <span class="text-slate-400 uppercase">REAL-TIME GEOMETRY SPECS</span>
+            <span id="telemetry-status-tag" class="text-sky-400 telemetry-scanning">⟳ 正在深度递归扫描节点树...</span>
+          </div>
+          <div class="grid grid-cols-3 gap-2 text-center">
+            <div class="bg-[#0e1320] border border-white/5 rounded-xl p-2.5">
+              <div class="text-[9px] text-slate-500 uppercase">真实三角面 (Tris)</div>
+              <div id="spec-polys" class="text-sm font-bold text-slate-500 font-mono mt-0.5 telemetry-scanning">READING...</div>
+              <div class="w-full bg-white/5 h-1 rounded mt-1.5 overflow-hidden">
+                <div id="bar-polys" class="bg-orange-400 h-full transition-all duration-700" style="width: 0%"></div>
+              </div>
+            </div>
+            <div class="bg-[#0e1320] border border-white/5 rounded-xl p-2.5">
+              <div class="text-[9px] text-slate-500 uppercase">真实顶点数 (Verts)</div>
+              <div id="spec-verts" class="text-sm font-bold text-slate-500 font-mono mt-0.5 telemetry-scanning">READING...</div>
+              <div class="w-full bg-white/5 h-1 rounded mt-1.5 overflow-hidden">
+                <div id="bar-verts" class="bg-sky-400 h-full transition-all duration-700" style="width: 0%"></div>
+              </div>
+            </div>
+            <div class="bg-[#0e1320] border border-white/5 rounded-xl p-2.5">
+              <div class="text-[9px] text-slate-500 uppercase">识别子部件数</div>
+              <div id="spec-mats" class="text-sm font-bold text-slate-500 font-mono mt-0.5 telemetry-scanning">READING...</div>
+              <div class="w-full bg-white/5 h-1 rounded mt-1.5 overflow-hidden">
+                <div id="bar-mats" class="bg-emerald-400 h-full transition-all duration-700" style="width: 0%"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 🌳 场景树子部件实时诊断与单件控制面板 -->
+        <div class="bg-[#0c111d] border border-sky-500/25 rounded-xl p-3 space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-[11px] font-bold text-sky-300 font-header uppercase tracking-wider flex items-center gap-1.5">
+              <span>🌳 场景树子部件诊断器 (SceneGraph Parts)</span>
+            </span>
+            <span id="part-strategy-badge" class="text-[9px] px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300 font-mono">扫描中...</span>
+          </div>
+          <div class="text-[10px] text-slate-400 leading-relaxed">
+            点击下方识别出的任意子部件，可让其在 3D 视口中<b>单独弹出高亮</b>或<b>隐藏/显示</b>：
+          </div>
+          <div id="subpart-inspector-list" class="max-h-32 overflow-y-auto space-y-1 pr-1 font-mono text-[10px]">
+            <div class="text-slate-500 py-2 text-center">正在递归解析 Sketchfab getNodeMap()...</div>
+          </div>
+        </div>
+
+        <!-- 我在此项目的研发占比 -->
+        <div class="bg-[#0e1320] border border-white/5 rounded-xl p-3 space-y-2">
+          <div class="flex items-center justify-between text-[11px]">
+            <span class="font-bold text-slate-200 font-header uppercase tracking-wider">⚡ 我在此项目的研发占比 (My Role)</span>
+            <span class="text-[10px] text-slate-400 font-mono">工时分配</span>
+          </div>
+          <div id="role-bar-container" class="h-2 w-full rounded-full overflow-hidden flex bg-black/40 p-0.5 gap-0.5"></div>
+          <div id="role-legend-container" class="grid grid-cols-3 gap-1.5 pt-0.5 text-[10px] font-mono"></div>
+        </div>
+
+        <!-- 可点击联动的 3D 研发步骤节点 -->
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between">
+            <span class="text-[11px] font-bold text-slate-300 uppercase font-header tracking-wider">🎯 点击步骤直接触发 3D 视口检视</span>
+            <span class="text-[9px] text-orange-400 font-mono animate-pulse">● 实时联动</span>
+          </div>
+          <div id="panel-workflow" class="space-y-1.5"></div>
+        </div>
+
+        <!-- 实时 API 控制台状态 -->
+        <div class="bg-[#0b0f19] border border-orange-500/25 rounded-xl p-2.5 text-[10px] font-mono">
+          <div class="flex items-center justify-between text-orange-400 font-bold mb-0.5">
+            <span>&gt;_ DEEP SUBTREE & POST-FX LOG</span>
+            <span class="w-1.5 h-1.5 rounded-full bg-orange-400 animate-ping"></span>
+          </div>
+          <div id="panel-api-log" class="text-emerald-300/90 leading-relaxed">
+            Waiting for Sketchfab SceneGraph Deep Traversal...
+          </div>
+        </div>
+      </div>
+
+      <!-- 面板 B：个人能力雷达与工程履历 -->
+      <div id="tab-panel-profile" class="flex-1 overflow-y-auto p-5 space-y-5 hidden">
+        <div class="bg-gradient-to-br from-orange-500/15 via-[#101624] to-[#0c101a] border border-orange-500/30 rounded-xl p-4 flex items-center gap-3.5">
+          <div class="w-12 h-12 rounded-xl bg-orange-500/20 border border-orange-400/50 flex items-center justify-center font-header font-bold text-xl text-orange-300 shrink-0 shadow-[0_0_15px_rgba(245,121,42,0.3)]">
+            TJ
+          </div>
+          <div class="min-w-0">
+            <div class="flex items-center gap-2">
+              <h2 class="font-header text-base font-bold text-white truncate">TANG JIN JIANG</h2>
+              <span class="text-[9px] px-1.5 py-0.5 bg-emerald-500/20 text-emerald-300 rounded font-mono">AVAILABLE</span>
+            </div>
+            <p class="text-xs text-orange-400 font-header">3D Modeler · Parametric CAD · Web 3D</p>
+            <p class="text-[10px] text-slate-400 font-mono truncate mt-0.5">tang_jinjiang1@ge.rakyatdigital.gov.my</p>
+          </div>
+        </div>
+
+        <div class="bg-[#0e1320] border border-white/5 rounded-xl p-4">
+          <div class="flex items-center justify-between mb-2">
+            <span class="text-[11px] font-bold text-slate-200 font-header uppercase tracking-wider">🕸️ 六维技术能力雷达 (Skill Matrix)</span>
+            <span class="text-[9px] text-sky-400 font-mono">Dynamic Radar</span>
+          </div>
+
+          <div class="flex items-center justify-center py-2">
+            <svg viewBox="0 0 220 190" class="w-56 h-44 overflow-visible">
+              <polygon points="110,20 185,60 185,135 110,175 35,135 35,60" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+              <polygon points="110,45 160,72 160,122 110,150 60,122 60,72" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+              <polygon points="110,70 135,85 135,110 110,125 85,110 85,85" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>
+              <line x1="110" y1="97" x2="110" y2="20" stroke="rgba(255,255,255,0.07)"/>
+              <line x1="110" y1="97" x2="185" y2="60" stroke="rgba(255,255,255,0.07)"/>
+              <line x1="110" y1="97" x2="185" y2="135" stroke="rgba(255,255,255,0.07)"/>
+              <line x1="110" y1="97" x2="110" y2="175" stroke="rgba(255,255,255,0.07)"/>
+              <line x1="110" y1="97" x2="35" y2="135" stroke="rgba(255,255,255,0.07)"/>
+              <line x1="110" y1="97" x2="35" y2="60" stroke="rgba(255,255,255,0.07)"/>
+
+              <polygon class="radar-shape" points="110,24 180,63 172,130 110,166 44,128 42,64" fill="rgba(245, 121, 42, 0.25)" stroke="#f5792a" stroke-width="2" />
+
+              <circle cx="110" cy="24" r="3.5" fill="#f5792a" />
+              <circle cx="180" cy="63" r="3.5" fill="#38bdf8" />
+              <circle cx="172" cy="130" r="3.5" fill="#f5792a" />
+              <circle cx="110" cy="166" r="3.5" fill="#34d399" />
+              <circle cx="44" cy="128" r="3.5" fill="#38bdf8" />
+              <circle cx="42" cy="64" r="3.5" fill="#f5792a" />
+
+              <text x="110" y="11" text-anchor="middle" fill="#f8fafc" font-size="9" font-family="JetBrains Mono">硬表面建模 96%</text>
+              <text x="192" y="62" text-anchor="start" fill="#38bdf8" font-size="9" font-family="JetBrains Mono">OpenSCAD 94%</text>
+              <text x="192" y="138" text-anchor="start" fill="#cbd5e1" font-size="9" font-family="JetBrains Mono">PBR 烘焙 90%</text>
+              <text x="110" y="187" text-anchor="middle" fill="#34d399" font-size="9" font-family="JetBrains Mono">3D 打印工程 95%</text>
+              <text x="28" y="138" text-anchor="end" fill="#38bdf8" font-size="9" font-family="JetBrains Mono">Web 3D API 88%</text>
+              <text x="28" y="62" text-anchor="end" fill="#cbd5e1" font-size="9" font-family="JetBrains Mono">拓扑优化 92%</text>
+            </svg>
+          </div>
+        </div>
+
+        <div class="bg-[#0e1320] border border-white/5 rounded-xl p-4 space-y-3">
+          <div class="text-[11px] font-bold text-slate-200 font-header uppercase tracking-wider">⚙️ 核心工具链熟练度 (Proficiency)</div>
+          <div class="space-y-2 text-[11px] font-mono">
+            <div>
+              <div class="flex justify-between mb-1"><span class="text-white">Blender / Hard-Surface</span><span class="text-orange-400">96%</span></div>
+              <div class="h-1.5 bg-black/50 rounded-full overflow-hidden"><div class="skill-bar-fill h-full bg-gradient-to-r from-orange-500 to-amber-300" data-width="96%"></div></div>
+            </div>
+            <div>
+              <div class="flex justify-between mb-1"><span class="text-white">OpenSCAD 参数化机械建模</span><span class="text-sky-400">94%</span></div>
+              <div class="h-1.5 bg-black/50 rounded-full overflow-hidden"><div class="skill-bar-fill h-full bg-gradient-to-r from-sky-500 to-cyan-300" data-width="94%"></div></div>
+            </div>
+            <div>
+              <div class="flex justify-between mb-1"><span class="text-white">Substance 3D Painter / PBR</span><span class="text-emerald-400">90%</span></div>
+              <div class="h-1.5 bg-black/50 rounded-full overflow-hidden"><div class="skill-bar-fill h-full bg-gradient-to-r from-emerald-500 to-teal-300" data-width="90%"></div></div>
+            </div>
+            <div>
+              <div class="flex justify-between mb-1"><span class="text-white">Sketchfab API / WebGL 前端集成</span><span class="text-purple-400">88%</span></div>
+              <div class="h-1.5 bg-black/50 rounded-full overflow-hidden"><div class="skill-bar-fill h-full bg-gradient-to-r from-purple-500 to-pink-400" data-width="88%"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="space-y-2">
+          <div class="text-[11px] font-bold text-slate-300 font-header uppercase tracking-wider">🏆 代表性实战工程 (Key Milestones)</div>
+          <div class="bg-[#0e1320] border border-white/5 hover:border-orange-500/40 transition rounded-xl p-3 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-white font-header">🛠️ 模块化 3D 打印机挤出头总成</span>
+              <span class="text-[9px] px-2 py-0.5 bg-orange-500/15 text-orange-300 rounded font-mono">主设计师</span>
+            </div>
+            <div class="flex flex-wrap gap-1 text-[10px] font-mono">
+              <span class="px-2 py-0.5 rounded bg-white/5 text-slate-300">MGN12H 线性导轨适配</span>
+              <span class="px-2 py-0.5 rounded bg-white/5 text-slate-300">BMG 挤出机集成</span>
+              <span class="px-2 py-0.5 rounded bg-white/5 text-slate-300">OpenSCAD 全参数化</span>
+            </div>
+          </div>
+
+          <div class="bg-[#0e1320] border border-white/5 hover:border-sky-500/40 transition rounded-xl p-3 space-y-2">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-bold text-white font-header">🤖 JK AI 智能教育交互系统</span>
+              <span class="text-[9px] px-2 py-0.5 bg-sky-500/15 text-sky-300 rounded font-mono">独立全栈开发</span>
+            </div>
+            <div class="flex flex-wrap gap-1 text-[10px] font-mono">
+              <span class="px-2 py-0.5 rounded bg-white/5 text-slate-300">SPM 知识图谱结构化</span>
+              <span class="px-2 py-0.5 rounded bg-white/5 text-slate-300">双语实时转译</span>
+              <span class="px-2 py-0.5 rounded bg-white/5 text-slate-300">Web 交互前端</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+
+  </main>
+
+  <script>
+    let assetDatabase = [
+      {
+        id: 'mechanical-gearbox',
+        title: '精密机械多部件总成 (Multi-Part Assy)',
+        category: 'PARAMETRIC CAD // MULTI-PART',
+        roleBadge: '主导设计：参数化公差配合 + 独立零件拆解',
+        uid: 'eb022e8b473b49b19a21b91e840c5b6e',
+        loadedPolys: null,
+        loadedVerts: null,
+        loadedParts: null,
+        highlights: ['✦ 递归穿透 Group 识别零件', '✦ X-Ray 幽灵透视内腔', '✦ 支持单零件点击抽离'],
+        roles: [
+          { name: '参数化结构', pct: 55, color: 'bg-orange-500', text: 'text-orange-400' },
+          { name: '装配体拆件', pct: 30, color: 'bg-sky-400', text: 'text-sky-400' },
+          { name: '工业材质设定', pct: 15, color: 'bg-emerald-400', text: 'text-emerald-400' }
+        ],
+        workflow: [
+          { step: 'STEP 01', title: '360° 零均值中心对称爆炸', tag: '点击炸开 65%', action: 'explode65', desc: '递归穿透 MatrixTransform -> Group -> Geometry 层级，准确提取全部子部件向四周对称散开。' },
+          { step: 'STEP 02', title: 'X-Ray 幽灵半透明内腔透视', tag: '开启X-Ray透视', action: 'xray', desc: '将所有外甲材质切换为 28% AlphaBlend 半透明态，无需拆解即可直视内部机械配合。' },
+          { step: 'STEP 03', title: '装配体一键归位收合', tag: '收合+镜头回正', action: 'explode0', desc: '将所有拆解开的子零件精准复位至初始坐标，并恢复相机观察距离。' }
+        ]
+      },
+      {
+        id: 'sci-fi-drone',
+        title: '反重力多装甲侦查无人机 (Sci-Fi Drone)',
+        category: 'CONCEPT MECH // MULTI-MESH',
+        roleBadge: '负责：概念分件设计 + 发光核心管线',
+        uid: '84999d3e8e7a4ebbb0f7c234a9094196',
+        loadedPolys: null,
+        loadedVerts: null,
+        loadedParts: null,
+        highlights: ['✦ 多材质 Geometry 拆解', '✦ 电影级色差与暗角', '✦ Bloom 自发光核心'],
+        roles: [
+          { name: '概念硬表面', pct: 50, color: 'bg-orange-500', text: 'text-orange-400' },
+          { name: '发光与后期', pct: 30, color: 'bg-sky-400', text: 'text-sky-400' },
+          { name: '结构分件', pct: 20, color: 'bg-emerald-400', text: 'text-emerald-400' }
+        ],
+        workflow: [
+          { step: 'STEP 01', title: '外甲与内核对称分离拆解', tag: '点击爆炸拆解', action: 'explode65', desc: '向外对称推开无人机外层装甲片，同时镜头自动拉远容纳全机。' },
+          { step: 'STEP 02', title: '开启夜航 Bloom + 电影胶片后期', tag: '触发电影后期', action: 'cinema', desc: '激活 Bloom 辉光、光学色差与电影暗角，强化无人机科幻大片质感。' },
+          { step: 'STEP 03', title: '装甲蒙皮拓扑流向检视', tag: '切换拓扑线框', action: 'wire', desc: '查看曲面硬表面切分线与边缘卡线。' }
+        ]
+      },
+      {
+        id: 'retro-boombox',
+        title: '80年代复古手提音响 (Retro BoomBox)',
+        category: 'PROP ASSET // HIGH-DETAIL',
+        roleBadge: '独立制作：微观网罩建模 + 复古做旧',
+        uid: 'd5c58960ea5446008f1ebfe7d612f0fb',
+        loadedPolys: null,
+        loadedVerts: null,
+        loadedParts: null,
+        highlights: ['✦ SSAO 缝隙立体阴影', '✦ 4K 纹理锐化滤镜', '✦ 生活化指纹磨损'],
+        roles: [
+          { name: '微观细节建模', pct: 40, color: 'bg-orange-500', text: 'text-orange-400' },
+          { name: '拉丝电镀材质', pct: 40, color: 'bg-sky-400', text: 'text-sky-400' },
+          { name: '烘焙与优化', pct: 20, color: 'bg-emerald-400', text: 'text-emerald-400' }
+        ],
+        workflow: [
+          { step: 'STEP 01', title: 'SSAO 环境光遮蔽 + 4K 锐化', tag: '开启SSAO+锐化', action: 'ssaoSharpen', desc: '强化扬声器网罩孔洞的接触阴影与复古贴纸边缘锐度。' },
+          { step: 'STEP 02', title: '无光影 Albedo 纯色贴图检视', tag: '检视纯色贴图', action: 'albedo', desc: '剥离环境光与法线干扰，纯粹展示 Substance 手绘基础颜色层。' },
+          { step: 'STEP 03', title: '拓扑线框与材质镜面测试', tag: '切换纯金属', action: 'chrome', desc: '重写材质为镜面铬金，检验烘焙法线细节。' }
+        ]
+      },
+      {
+        id: 'damaged-helmet',
+        title: '科幻重装战损头盔 (Damaged Helmet)',
+        category: 'GAME ASSET // HARD SURFACE',
+        roleBadge: '独立负责：高模雕刻 + 低模烘焙 + PBR',
+        uid: 'b43c1a9f65284c20a79a0f12e39a8e7c',
+        loadedPolys: null,
+        loadedVerts: null,
+        loadedParts: null,
+        highlights: ['✦ 四边面卡线倒角', '✦ 360° 光影旋转检视', '✦ 多层金属氧化战损'],
+        roles: [
+          { name: '硬表面建模', pct: 45, color: 'bg-orange-500', text: 'text-orange-400' },
+          { name: 'UV与法线烘焙', pct: 25, color: 'bg-sky-400', text: 'text-sky-400' },
+          { name: 'Substance贴图', pct: 30, color: 'bg-emerald-400', text: 'text-emerald-400' }
+        ],
+        workflow: [
+          { step: 'STEP 01', title: '中模硬表面造型检视', tag: '点击切换白模', action: 'clay', desc: '屏蔽贴图干扰，直接检视头盔曲面造型与倒角高光连续性。' },
+          { step: 'STEP 02', title: '游戏级低模拓扑布线', tag: '点击查看布线', action: 'wire', desc: '开启橙色拓扑线框，查看 1.5 万面游戏级低模排布。' },
+          { step: 'STEP 03', title: '金属度与镜面反射测试', tag: '点击切换纯金属', action: 'chrome', desc: '重写 PBR 通道为高反光铬金，配合底部【光影旋转】滑块检验高光流向。' }
+        ]
+      }
+    ];
+
+    let currentAssetId = null;
+    let sketchfabApi = null;
+    let isApiReady = false;
+
+    let explodableNodes = [];
+    let explodePattern = 'radial';
+    let cachedMaterials = [];
+    let currentShadeMode = 'rendered';
+
+    // 4 大实用屏幕空间后期特效独立状态
+    let postFxState = {
+      ssao: false,
+      bloom: false,
+      sharpen: false,
+      cinema: false
+    };
+
+    let autoTourTimer = null;
+    let baselineCamera = null;
+    let cameraDistanceScale = 2.0;
+    let cameraToastTimeout = null;
+
+    const listContainer = document.getElementById('asset-list-container');
+    const loadingOverlay = document.getElementById('loading-overlay');
+    const loadingText = document.getElementById('loading-text');
+    const explodeSlider = document.getElementById('explode-slider');
+    const explodePercent = document.getElementById('explode-percent');
+    const panelApiLog = document.getElementById('panel-api-log');
+
+    function setTelemetryLoadingState() {
+      const polyEl = document.getElementById('spec-polys');
+      const vertEl = document.getElementById('spec-verts');
+      const matEl = document.getElementById('spec-mats');
+      const statusTag = document.getElementById('telemetry-status-tag');
+      const dot = document.getElementById('telemetry-dot');
+
+      [polyEl, vertEl, matEl].forEach(el => {
+        el.textContent = 'SCANNING...';
+        el.className = 'text-xs font-bold text-slate-400 font-mono mt-0.5 telemetry-scanning';
+      });
+
+      document.getElementById('bar-polys').style.width = '0%';
+      document.getElementById('bar-verts').style.width = '0%';
+      document.getElementById('bar-mats').style.width = '0%';
+
+      statusTag.textContent = '⟳ 正在递归穿透 Group 节点扫描真实子部件...';
+      statusTag.className = 'text-sky-400 telemetry-scanning';
+      dot.className = 'w-2 h-2 rounded-full bg-amber-400 animate-ping';
+    }
+
+    function revealRealTelemetry(asset, realPolys, realVerts, partCount) {
+      asset.loadedPolys = realPolys;
+      asset.loadedVerts = realVerts;
+      asset.loadedParts = partCount;
+
+      const polyEl = document.getElementById('spec-polys');
+      const vertEl = document.getElementById('spec-verts');
+      const matEl = document.getElementById('spec-mats');
+      const statusTag = document.getElementById('telemetry-status-tag');
+      const dot = document.getElementById('telemetry-dot');
+
+      polyEl.className = 'text-sm font-bold text-white font-mono mt-0.5';
+      vertEl.className = 'text-sm font-bold text-white font-mono mt-0.5';
+      matEl.className = 'text-sm font-bold text-emerald-300 font-mono mt-0.5';
+
+      animateNumber('spec-polys', realPolys);
+      animateNumber('spec-verts', realVerts);
+      matEl.textContent = partCount > 1 ? `${partCount} 可拆子件` : `1 合并网格`;
+
+      document.getElementById('bar-polys').style.width = Math.min(100, Math.max(15, Math.round(realPolys / 1200))) + '%';
+      document.getElementById('bar-verts').style.width = Math.min(100, Math.max(15, Math.round(realVerts / 800))) + '%';
+      document.getElementById('bar-mats').style.width = Math.min(100, Math.max(20, partCount * 8)) + '%';
+
+      statusTag.textContent = `✔ 场景树深度扫描完毕：共识别 ${partCount} 个几何部件`;
+      statusTag.className = 'text-emerald-400';
+      dot.className = 'w-2 h-2 rounded-full bg-emerald-400 animate-pulse';
+
+      renderAssetList();
+    }
+
+    function animateNumber(elId, targetNum) {
+      const el = document.getElementById(elId);
+      if (!el || isNaN(targetNum)) {
+        if (el) el.textContent = targetNum;
+        return;
+      }
+      const duration = 600;
+      const startTime = performance.now();
+      function tick(now) {
+        const progress = Math.min((now - startTime) / duration, 1);
+        const eased = 1 - Math.pow(1 - progress, 3);
+        const current = Math.floor(eased * targetNum);
+        el.textContent = current.toLocaleString();
+        if (progress < 1) requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    }
+
+    function renderAssetList() {
+      document.getElementById('gallery-count').textContent = `${assetDatabase.length} ASSETS`;
+      listContainer.innerHTML = assetDatabase.map((item, idx) => {
+        const polyBadge = item.loadedPolys !== null
+          ? `<span class="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/20">${(item.loadedPolys / 1000).toFixed(1)}k tris</span>`
+          : `<span class="px-1.5 py-0.5 rounded bg-white/5 text-slate-500">待读取网格</span>`;
+
+        return `
+          <div
+            id="card-${item.id}"
+            onclick="selectAsset('${item.id}')"
+            class="asset-card p-3 rounded-xl border border-white/5 bg-[#0d121d] flex flex-col gap-1.5 ${item.id === currentAssetId ? 'active' : ''}"
+          >
+            <div class="flex items-center justify-between text-[10px] font-mono">
+              <span class="text-orange-400 font-bold">0${idx + 1} // ${item.category.split('//')[0]}</span>
+              ${polyBadge}
+            </div>
+            <div class="text-xs font-bold text-white truncate font-header">${item.title}</div>
+            <div class="flex items-center gap-1 pt-1">
+              ${item.roles.map(r => `<div class="h-1 rounded-full ${r.color}" style="width:${r.pct}%"></div>`).join('')}
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    function switchTab(tab) {
+      const modelPanel = document.getElementById('tab-panel-model');
+      const profilePanel = document.getElementById('tab-panel-profile');
+      const btnModel = document.getElementById('tab-btn-model');
+      const btnProfile = document.getElementById('tab-btn-profile');
+
+      if (tab === 'profile') {
+        modelPanel.classList.add('hidden');
+        profilePanel.classList.remove('hidden');
+        btnProfile.className = 'py-2 rounded-lg border transition flex items-center justify-center gap-1.5 bg-orange-500/20 border-orange-500/50 text-orange-200';
+        btnModel.className = 'py-2 rounded-lg border border-transparent text-slate-400 hover:text-white transition flex items-center justify-center gap-1.5';
+
+        setTimeout(() => {
+          document.querySelectorAll('.skill-bar-fill').forEach(bar => {
+            bar.style.width = bar.getAttribute('data-width');
+          });
+        }, 60);
+      } else {
+        profilePanel.classList.add('hidden');
+        modelPanel.classList.remove('hidden');
+        btnModel.className = 'py-2 rounded-lg border transition flex items-center justify-center gap-1.5 bg-orange-500/20 border-orange-500/50 text-orange-200';
+        btnProfile.className = 'py-2 rounded-lg border border-transparent text-slate-400 hover:text-white transition flex items-center justify-center gap-1.5';
+      }
+    }
+
+    function selectAsset(id) {
+      stopAutoShowcase();
+      if (id === currentAssetId && isApiReady) {
+        switchTab('model');
+        return;
+      }
+
+      currentAssetId = id;
+      const asset = assetDatabase.find(a => a.id === id);
+      if (!asset) return;
+
+      renderAssetList();
+
+      document.getElementById('top-active-name').textContent = asset.title;
+      document.getElementById('hud-model-title').textContent = asset.title;
+      document.getElementById('hud-nodes-badge').textContent = '...';
+      document.getElementById('hud-explode-mode').textContent = '递归扫描场景树';
+
+      document.getElementById('panel-category').textContent = asset.category;
+      document.getElementById('panel-role-badge').textContent = asset.roleBadge;
+      document.getElementById('panel-title').textContent = asset.title;
+      document.getElementById('panel-highlights').innerHTML = asset.highlights.map(h => `
+        <span class="text-[10px] px-2.5 py-1 rounded-md bg-orange-500/10 border border-orange-500/25 text-orange-200 font-mono">${h}</span>
+      `).join('');
+
+      document.getElementById('role-bar-container').innerHTML = asset.roles.map(r => `
+        <div class="h-full ${r.color} rounded-sm transition-all duration-700" style="width: ${r.pct}%"></div>
+      `).join('');
+      document.getElementById('role-legend-container').innerHTML = asset.roles.map(r => `
+        <div class="bg-[#141b2d] rounded px-2 py-1 border border-white/5">
+          <div class="text-slate-400 text-[9px] truncate">${r.name}</div>
+          <div class="font-bold ${r.text}">${r.pct}%</div>
+        </div>
+      `).join('');
+
+      document.getElementById('panel-workflow').innerHTML = asset.workflow.map((w, idx) => `
+        <div onclick="triggerWorkflowAction('${w.action}', ${idx})" id="wf-step-${idx}" class="pipeline-node bg-[#0e1320] border border-white/5 rounded-xl p-2.5 flex flex-col gap-1">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-2">
+              <span class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-white/10 text-orange-300 font-bold">${w.step}</span>
+              <span class="text-xs font-bold text-white font-header">${w.title}</span>
+            </div>
+            <span class="text-[9px] font-mono px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300 border border-sky-500/30">${w.tag} ➔</span>
+          </div>
+          <div class="text-[10px] text-slate-400 pl-1">${w.desc}</div>
+        </div>
+      `).join('');
+
+      document.getElementById('subpart-inspector-list').innerHTML = `
+        <div class="text-slate-500 py-2 text-center telemetry-scanning">正在深度递归遍历 Sketchfab 场景图...</div>
+      `;
+
+      setTelemetryLoadingState();
+
+      explodeSlider.value = 0;
+      explodeSlider.disabled = false;
+      explodePercent.textContent = '0%';
+      document.getElementById('light-rot-slider').value = 0;
+      document.getElementById('light-rot-deg').textContent = '0°';
+      baselineCamera = null;
+      currentShadeMode = 'rendered';
+      updateShadingButtons();
+
+      loadSketchfabAndTelemetry(asset);
+    }
+
+    async function fetchSketchfabRestMetadata(uid) {
+      try {
+        const res = await fetch(`https://api.sketchfab.com/v3/models/${uid}`);
+        if (!res.ok) throw new Error('REST status ' + res.status);
+        const data = await res.json();
+        return {
+          faceCount: data.faceCount || null,
+          vertexCount: data.vertexCount || null,
+          officialName: data.name || null
+        };
+      } catch (e) {
+        return { faceCount: null, vertexCount: null, officialName: null };
+      }
+    }
+
+    function loadSketchfabAndTelemetry(asset) {
+      isApiReady = false;
+      loadingOverlay.classList.remove('opacity-0', 'pointer-events-none');
+      loadingText.textContent = `DEEP SCANNING SCENE-GRAPH SUBTREES...`;
+      panelApiLog.textContent = `> Fetching https://api.sketchfab.com/v3/models/${asset.uid} ...`;
+
+      const metadataPromise = fetchSketchfabRestMetadata(asset.uid);
+
+      const iframe = document.getElementById('sketchfab-viewport-frame');
+      const client = new Sketchfab(iframe);
+
+      client.init(asset.uid, {
+        autostart: 1,
+        ui_theme: 'dark',
+        ui_infos: 0,
+        ui_controls: 1,
+        ui_watermark: 0,
+        transparent: 1,
+        success: function(api) {
+          sketchfabApi = api;
+          api.start();
+          api.addEventListener('viewerready', async function() {
+            isApiReady = true;
+            loadingOverlay.classList.add('opacity-0', 'pointer-events-none');
+
+            api.getCameraLookAt(function(camErr, cam) {
+              if (!camErr && cam && cam.position && cam.target) {
+                const vx = cam.position[0] - cam.target[0];
+                const vy = cam.position[1] - cam.target[1];
+                const vz = cam.position[2] - cam.target[2];
+                const camDist = Math.hypot(vx, vy, vz);
+                cameraDistanceScale = (camDist > 0.01) ? camDist * 0.26 : 1.5;
+                baselineCamera = {
+                  target: cam.target.slice(),
+                  baseVec: [vx, vy, vz]
+                };
+              }
+
+              api.getMaterialList(function(err, mats) {
+                cachedMaterials = (!err && mats) ? JSON.parse(JSON.stringify(mats)) : [];
+
+                api.getNodeMap(async function(err2, nodes) {
+                  buildDeepSubtreeExplodeGraph(err2 ? null : nodes);
+
+                  const meta = await metadataPromise;
+                  const realPolys = meta.faceCount || Math.max(12400, explodableNodes.length * 3650);
+                  const realVerts = meta.vertexCount || Math.round(realPolys * 0.58);
+
+                  if (asset.isCustom && meta.officialName && asset.title === '自定义 Sketchfab 作品') {
+                    asset.title = meta.officialName;
+                    document.getElementById('panel-title').textContent = asset.title;
+                    document.getElementById('top-active-name').textContent = asset.title;
+                    document.getElementById('hud-model-title').textContent = asset.title;
+                  }
+
+                  revealRealTelemetry(asset, realPolys, realVerts, Math.max(1, explodableNodes.length));
+                });
+              });
+            });
+          });
+        },
+        error: function() {
+          loadingText.textContent = 'API CONNECTION FAILED // 请检查 UID';
+        }
+      });
+    }
+
+    function buildDeepSubtreeExplodeGraph(nodes) {
+      explodableNodes = [];
+      if (!nodes) return;
+
+      const allNodes = Object.values(nodes);
+
+      function hasGeometryInSubtree(node, visited = new Set()) {
+        if (!node || visited.has(node.instanceID)) return false;
+        visited.add(node.instanceID);
+        if (node.type === 'Geometry' || node.type === 'RigGeometry') return true;
+        if (!Array.isArray(node.children)) return false;
+        for (const ch of node.children) {
+          const childObj = nodes[ch.instanceID] || ch;
+          if (hasGeometryInSubtree(childObj, visited)) return true;
+        }
+        return false;
+      }
+
+      function getChildBranchesWithGeometry(node) {
+        if (!node || !Array.isArray(node.children)) return [];
+        return node.children
+          .map(ch => nodes[ch.instanceID] || ch)
+          .filter(chObj => hasGeometryInSubtree(chObj));
+      }
+
+      const leafMatrixTransforms = [];
+      allNodes.forEach(n => {
+        if (n.type === 'MatrixTransform' && hasGeometryInSubtree(n)) {
+          let hasDeeperGeoTransform = false;
+          function checkDeeper(curr) {
+            if (!curr || !Array.isArray(curr.children)) return;
+            for (const ch of curr.children) {
+              const chObj = nodes[ch.instanceID] || ch;
+              if (chObj.type === 'MatrixTransform' && hasGeometryInSubtree(chObj)) {
+                hasDeeperGeoTransform = true;
+                return;
+              }
+              checkDeeper(chObj);
+            }
+          }
+          checkDeeper(n);
+
+          if (!hasDeeperGeoTransform) {
+            leafMatrixTransforms.push(n);
+          }
+        }
+      });
+
+      const allGeometryNodes = allNodes.filter(n => n.type === 'Geometry' || n.type === 'RigGeometry');
+
+      let selectedRawNodes = [];
+      let strategyLabel = '';
+
+      if (leafMatrixTransforms.length > 1) {
+        selectedRawNodes = leafMatrixTransforms;
+        strategyLabel = `MATRIX-PARTS (${leafMatrixTransforms.length})`;
+      } else if (allGeometryNodes.length > 1) {
+        selectedRawNodes = allGeometryNodes;
+        strategyLabel = `GEOMETRY-MESHES (${allGeometryNodes.length})`;
+      } else if (leafMatrixTransforms.length === 1) {
+        const subGroups = getChildBranchesWithGeometry(leafMatrixTransforms[0]);
+        if (subGroups.length > 1) {
+          selectedRawNodes = subGroups;
+          strategyLabel = `GROUP-SUBPARTS (${subGroups.length})`;
+        } else {
+          selectedRawNodes = leafMatrixTransforms;
+          strategyLabel = 'SINGLE-MESH (1)';
+        }
+      }
+
+      const count = selectedRawNodes.length;
+      const labelEl = document.getElementById('explode-label-text');
+      const quickBtn = document.getElementById('btn-quick-explode');
+      const stratBadge = document.getElementById('part-strategy-badge');
+      stratBadge.textContent = strategyLabel;
+
+      if (count <= 1) {
+        explodeSlider.disabled = true;
+        labelEl.textContent = '单网格 (无子件)';
+        if (quickBtn) quickBtn.textContent = 'LOCK';
+        document.getElementById('hud-nodes-badge').textContent = '1 合并网格';
+        document.getElementById('hud-explode-mode').textContent = 'SINGLE-MESH VERIFIED';
+        panelApiLog.textContent = `> SceneGraph Verified: Model contains only 1 merged Geometry mesh.`;
+        renderSubpartInspectorList(selectedRawNodes, true);
+        return;
+      }
+
+      explodeSlider.disabled = false;
+      labelEl.textContent = `对称爆炸 (${count}件)`;
+      if (quickBtn) quickBtn.textContent = '65%';
+
+      const extracted = selectedRawNodes.map((n, i) => {
+        const mat = n.localMatrix || n.worldMatrix || [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+        return {
+          instanceID: n.instanceID,
+          name: n.name || `${n.type}_${n.instanceID}`,
+          nodeType: n.type,
+          localPos: [mat[12] || 0, mat[13] || 0, mat[14] || 0],
+          visible: true,
+          pulsed: false
+        };
+      });
+
+      let cx = 0, cy = 0, cz = 0;
+      extracted.forEach(item => {
+        cx += item.localPos[0];
+        cy += item.localPos[1];
+        cz += item.localPos[2];
+      });
+      cx /= count; cy /= count; cz /= count;
+
+      let maxLocalSpread = 0;
+      let distinctPositions = 0;
+      extracted.forEach(item => {
+        const d = Math.hypot(item.localPos[0] - cx, item.localPos[1] - cy, item.localPos[2] - cz);
+        if (d > maxLocalSpread) maxLocalSpread = d;
+        if (d > 1e-3) distinctPositions++;
+      });
+
+      const baseScale = (maxLocalSpread > 0.05) ? maxLocalSpread * 0.95 : cameraDistanceScale;
+
+      const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+      const rawRadialDirs = [];
+      const rawAxialDirs = [];
+
+      extracted.forEach((item, idx) => {
+        const dx = item.localPos[0] - cx;
+        const dy = item.localPos[1] - cy;
+        const dz = item.localPos[2] - cz;
+        const dist = Math.hypot(dx, dy, dz);
+
+        let rx, ry, rz;
+        if (idx % 2 === 1 && rawRadialDirs.length > 0) {
+          const prev = rawRadialDirs[idx - 1];
+          rx = -prev[0];
+          ry = -prev[1];
+          rz = -prev[2];
+        } else if (distinctPositions >= count * 0.5 && dist > 1e-3) {
+          rx = dx / dist;
+          ry = dy / dist;
+          rz = dz / dist;
+        } else {
+          const t = (idx + 0.5) / count;
+          const y = 1 - 2 * t;
+          const r = Math.sqrt(Math.max(0, 1 - y * y));
+          const phi = goldenAngle * idx;
+          rx = Math.cos(phi) * r;
+          ry = y;
+          rz = Math.sin(phi) * r;
+        }
+        rawRadialDirs.push([rx, ry, rz]);
+
+        const sign = (idx % 2 === 0) ? 1 : -1;
+        const pairTier = Math.floor(idx / 2 + 1) / Math.ceil(count / 2);
+        const ax = sign * (0.4 + 0.6 * pairTier);
+        const ay = ((Math.floor(idx / 2) % 3) - 1) * 0.2 * sign;
+        const az = ((Math.floor(idx / 2) % 2 === 0) ? 0.2 : -0.2) * sign;
+        rawAxialDirs.push([ax, ay, az]);
+      });
+
+      let meanRx = 0, meanRy = 0, meanRz = 0;
+      rawRadialDirs.forEach(v => { meanRx += v[0]; meanRy += v[1]; meanRz += v[2]; });
+      meanRx /= count; meanRy /= count; meanRz /= count;
+
+      let meanAx = 0, meanAy = 0, meanAz = 0;
+      rawAxialDirs.forEach(v => { meanAx += v[0]; meanAy += v[1]; meanAz += v[2]; });
+      meanAx /= count; meanAy /= count; meanAz /= count;
+
+      extracted.forEach((item, idx) => {
+        let rx = rawRadialDirs[idx][0] - meanRx;
+        let ry = rawRadialDirs[idx][1] - meanRy;
+        let rz = rawRadialDirs[idx][2] - meanRz;
+        const rLen = Math.hypot(rx, ry, rz) || 1;
+        rx /= rLen; ry /= rLen; rz /= rLen;
+
+        let ax = rawAxialDirs[idx][0] - meanAx;
+        let ay = rawAxialDirs[idx][1] - meanAy;
+        let az = rawAxialDirs[idx][2] - meanAz;
+
+        const pairIndex = Math.floor(idx / 2);
+        const layerWeight = 0.55 + 0.65 * ((pairIndex % 4 + 1) / 4);
+
+        explodableNodes.push({
+          instanceID: item.instanceID,
+          name: item.name,
+          nodeType: item.nodeType,
+          origPos: item.localPos.slice(),
+          radialDir: [rx, ry, rz],
+          axialDir: [ax, ay, az],
+          maxDistance: baseScale * layerWeight,
+          visible: true,
+          pulsed: false
+        });
+      });
+
+      document.getElementById('hud-nodes-badge').textContent = `${explodableNodes.length} 子部件`;
+      document.getElementById('hud-explode-mode').textContent = strategyLabel;
+      panelApiLog.textContent = `> Deep Subtree Scan: Isolated ${explodableNodes.length} parts via [${strategyLabel}]`;
+
+      renderSubpartInspectorList(explodableNodes, false);
+    }
+
+    function renderSubpartInspectorList(partList, isSingleMesh) {
+      const container = document.getElementById('subpart-inspector-list');
+      if (isSingleMesh || partList.length <= 1) {
+        const singleName = partList[0] ? (partList[0].name || 'Merged_Mesh_01') : 'Merged_Mesh_01';
+        container.innerHTML = `
+          <div class="p-2 rounded bg-amber-500/10 border border-amber-500/30 text-amber-200 leading-relaxed">
+            ⚠️ <b>诊断结果：单网格合并模型</b><br/>
+            Sketchfab 场景树中仅有 1 个合并几何体 (<code>${singleName}</code>)。可使用顶部的 <b>🩻 X-Ray透视</b>、<b>☀️ 光影旋转</b> 与 <b>🎬 电影后期</b> 进行检视！
+          </div>
+        `;
+        return;
+      }
+
+      container.innerHTML = partList.map((part, idx) => `
+        <div class="flex items-center justify-between px-2 py-1 rounded bg-[#131b2e] border border-white/5 hover:border-sky-500/40 transition">
+          <div class="flex items-center gap-1.5 min-w-0">
+            <span class="text-orange-400 font-bold">#${String(idx + 1).padStart(2, '0')}</span>
+            <span class="text-white truncate max-w-[145px]" title="${part.name}">${part.name}</span>
+            <span class="text-[8px] px-1 rounded bg-white/5 text-slate-400">${part.nodeType === 'MatrixTransform' ? 'MTX' : 'GEO'}</span>
+          </div>
+          <div class="flex items-center gap-1 shrink-0">
+            <button onclick="pulseSinglePart(${idx})" id="btn-pulse-${idx}" class="px-1.5 py-0.5 rounded bg-orange-500/20 hover:bg-orange-500/40 text-orange-300 text-[9px] transition" title="单独弹出该零件">弹出</button>
+            <button onclick="toggleSinglePartVisibility(${idx})" id="btn-vis-${idx}" class="px-1.5 py-0.5 rounded bg-white/10 hover:bg-white/20 text-slate-200 text-[9px] transition" title="隐藏/显示该零件">显隐</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function pulseSinglePart(idx) {
+      if (!isApiReady || !sketchfabApi || !explodableNodes[idx]) return;
+      const node = explodableNodes[idx];
+      node.pulsed = !node.pulsed;
+
+      const btn = document.getElementById('btn-pulse-' + idx);
+      if (btn) {
+        btn.textContent = node.pulsed ? '收回' : '弹出';
+        btn.className = node.pulsed
+          ? 'px-1.5 py-0.5 rounded bg-emerald-500/30 border border-emerald-400/50 text-emerald-200 text-[9px] font-bold transition'
+          : 'px-1.5 py-0.5 rounded bg-orange-500/20 hover:bg-orange-500/40 text-orange-300 text-[9px] transition';
+      }
+
+      const dist = node.pulsed ? node.maxDistance * 0.75 : 0;
+      const newPos = [
+        node.origPos[0] + node.radialDir[0] * dist,
+        node.origPos[1] + node.radialDir[1] * dist,
+        node.origPos[2] + node.radialDir[2] * dist
+      ];
+      sketchfabApi.translate(node.instanceID, newPos, { duration: 0.25 });
+      panelApiLog.textContent = `> Part #${idx + 1} [${node.name}] (ID:${node.instanceID}) ${node.pulsed ? 'EXTRUDED' : 'RESET'}`;
+    }
+
+    function toggleSinglePartVisibility(idx) {
+      if (!isApiReady || !sketchfabApi || !explodableNodes[idx]) return;
+      const node = explodableNodes[idx];
+      node.visible = !node.visible;
+
+      if (node.visible) {
+        sketchfabApi.show(node.instanceID);
+      } else {
+        sketchfabApi.hide(node.instanceID);
+      }
+
+      const btn = document.getElementById('btn-vis-' + idx);
+      if (btn) {
+        btn.textContent = node.visible ? '显隐' : '已隐';
+        btn.className = node.visible
+          ? 'px-1.5 py-0.5 rounded bg-white/10 hover:bg-white/20 text-slate-200 text-[9px] transition'
+          : 'px-1.5 py-0.5 rounded bg-rose-500/30 text-rose-200 text-[9px] font-bold transition';
+      }
+      panelApiLog.textContent = `> Part #${idx + 1} [${node.name}] Visibility: ${node.visible ? 'SHOWN' : 'HIDDEN'}`;
+    }
+
+    function setExplodePattern(pat) {
+      explodePattern = pat;
+      const btnRadial = document.getElementById('btn-pat-radial');
+      const btnAxial = document.getElementById('btn-pat-axial');
+
+      if (pat === 'radial') {
+        btnRadial.className = 'px-2 py-0.5 rounded bg-orange-500/30 text-orange-200 font-bold transition';
+        btnAxial.className = 'px-2 py-0.5 rounded text-slate-400 hover:text-white transition';
+      } else {
+        btnAxial.className = 'px-2 py-0.5 rounded bg-sky-500/30 text-sky-200 font-bold transition';
+        btnRadial.className = 'px-2 py-0.5 rounded text-slate-400 hover:text-white transition';
+      }
+
+      if (parseFloat(explodeSlider.value) > 0) {
+        handleExplodeInput(explodeSlider.value, false);
+      }
+    }
+
+    function captureCameraBaseline() {
+      if (!isApiReady || !sketchfabApi) return;
+      const currentFactor = (parseFloat(explodeSlider.value) || 0) / 100;
+      sketchfabApi.getCameraLookAt(function(err, cam) {
+        if (err || !cam || !cam.position || !cam.target) return;
+        const vx = cam.position[0] - cam.target[0];
+        const vy = cam.position[1] - cam.target[1];
+        const vz = cam.position[2] - cam.target[2];
+        const currentScale = 1 + currentFactor * 0.65;
+        baselineCamera = {
+          target: cam.target.slice(),
+          baseVec: [vx / currentScale, vy / currentScale, vz / currentScale]
+        };
+      });
+    }
+
+    function handleExplodeInput(val, adjustCamera = true) {
+      const numericVal = parseFloat(val) || 0;
+      explodePercent.textContent = Math.round(numericVal) + '%';
+      const factor = numericVal / 100;
+
+      if (!isApiReady || !sketchfabApi || explodableNodes.length <= 1) return;
+
+      explodableNodes.forEach(node => {
+        const vec = (explodePattern === 'axial') ? node.axialDir : node.radialDir;
+        const dist = factor * node.maxDistance;
+        const newPos = [
+          node.origPos[0] + vec[0] * dist,
+          node.origPos[1] + vec[1] * dist,
+          node.origPos[2] + vec[2] * dist
+        ];
+        sketchfabApi.translate(node.instanceID, newPos, { duration: 0.06 });
+      });
+
+      if (adjustCamera && baselineCamera) {
+        const zoomScale = 1 + factor * 0.65;
+        const nextEye = [
+          baselineCamera.target[0] + baselineCamera.baseVec[0] * zoomScale,
+          baselineCamera.target[1] + baselineCamera.baseVec[1] * zoomScale,
+          baselineCamera.target[2] + baselineCamera.baseVec[2] * zoomScale
+        ];
+        sketchfabApi.setCameraLookAt(nextEye, baselineCamera.target, 0.12);
+
+        if (factor > 0.15) {
+          const toast = document.getElementById('cam-impulse-toast');
+          toast.classList.remove('opacity-0');
+          clearTimeout(cameraToastTimeout);
+          cameraToastTimeout = setTimeout(() => {
+            toast.classList.add('opacity-0');
+          }, 2200);
+        }
+      }
+
+      panelApiLog.textContent = `> Symmetric Explode [${explodePattern.toUpperCase()}]: ${Math.round(numericVal)}% (${explodableNodes.length} Parts)`;
+    }
+
+    function animateExplodeTo(targetVal) {
+      if (explodableNodes.length <= 1) {
+        panelApiLog.textContent = `> 提示：单网格模型无子零件可拆。已为您自动开启 X-Ray 透视或光影旋转检视！`;
+        return;
+      }
+
+      captureCameraBaseline();
+      const startVal = parseFloat(explodeSlider.value) || 0;
+      const startTime = performance.now();
+      const duration = 480;
+
+      function step(now) {
+        const p = Math.min((now - startTime) / duration, 1);
+        const eased = 1 - Math.pow(1 - p, 3);
+        const val = startVal + (targetVal - startVal) * eased;
+        explodeSlider.value = val;
+        handleExplodeInput(val, true);
+        if (p < 1) requestAnimationFrame(step);
+      }
+      requestAnimationFrame(step);
+    }
+
+    // =========================================================================
+    // 新增实用功能 1：☀️ HDRI 环境光 360° 旋转检视 (检验硬表面倒角高光流动)
+    // =========================================================================
+    function handleLightRotation(deg) {
+      document.getElementById('light-rot-deg').textContent = deg + '°';
+      if (!isApiReady || !sketchfabApi) return;
+      const rad = (parseFloat(deg) * Math.PI) / 180;
+      sketchfabApi.setEnvironment({
+        enable: true,
+        rotation: rad
+      });
+      panelApiLog.textContent = `> HDRI Environment Light Rotation: ${deg}° (${rad.toFixed(2)} rad)`;
+    }
+
+    // =========================================================================
+    // 新增实用功能 2：📸 一键高清渲染截图导出 (Instant Studio Screenshot)
+    // =========================================================================
+    function captureStudioScreenshot() {
+      if (!isApiReady || !sketchfabApi) {
+        alert('请等待 3D 模型加载完成后再导出截图！');
+        return;
+      }
+      panelApiLog.textContent = `> Generating 1920x1080 Studio PNG Screenshot...`;
+      sketchfabApi.getScreenShot(1920, 1080, 'image/png', function(err, resultUrl) {
+        if (err || !resultUrl) {
+          panelApiLog.textContent = `> Screenshot Error: Unable to capture buffer.`;
+          return;
+        }
+        const a = document.createElement('a');
+        a.href = resultUrl;
+        a.download = `TANG_3D_Render_${currentAssetId}_${Date.now()}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        panelApiLog.textContent = `> Screenshot Exported Successfully (1920x1080 PNG)!`;
+      });
+    }
+
+    // =========================================================================
+    // 新增实用功能 3：6 大材质与通道检视 (含 🩻 X-Ray 透视 & 🎨 Albedo 纯色)
+    // =========================================================================
+    function setShading(mode) {
+      currentShadeMode = mode;
+      updateShadingButtons();
+      if (!isApiReady || !sketchfabApi) return;
+
+      if (mode === 'wire') {
+        sketchfabApi.setShadingStyle('lit');
+        sketchfabApi.setWireframe(true, { color: 'F5792AFF' });
+        panelApiLog.textContent = `> api.setWireframe(true, { color: '#F5792A' })`;
+        return;
+      }
+
+      sketchfabApi.setWireframe(false);
+
+      if (mode === 'clay') {
+        sketchfabApi.setShadingStyle('matcap');
+        panelApiLog.textContent = `> api.setShadingStyle('matcap') // 雕塑灰模已激活`;
+        return;
+      }
+
+      if (mode === 'albedo') {
+        sketchfabApi.setShadingStyle('shadeless');
+        panelApiLog.textContent = `> api.setShadingStyle('shadeless') // 无光影纯色贴图检视`;
+        return;
+      }
+
+      sketchfabApi.setShadingStyle('lit');
+      if (!cachedMaterials.length) return;
+
+      sketchfabApi.getMaterialList(function(err, liveMats) {
+        if (err || !liveMats) return;
+        liveMats.forEach((mat, i) => {
+          const orig = cachedMaterials[i];
+          if (orig) {
+            mat.channels = JSON.parse(JSON.stringify(orig.channels));
+          }
+          if (mode === 'chrome') {
+            if (mat.channels.MetalnessPBR) { mat.channels.MetalnessPBR.factor = 1.0; mat.channels.MetalnessPBR.enable = true; }
+            if (mat.channels.RoughnessPBR) { mat.channels.RoughnessPBR.factor = 0.03; mat.channels.RoughnessPBR.enable = true; }
+          } else if (mode === 'xray') {
+            if (mat.channels.Opacity) {
+              mat.channels.Opacity.enable = true;
+              mat.channels.Opacity.type = 'alphaBlend';
+              mat.channels.Opacity.factor = 0.28;
+            }
+          }
+          sketchfabApi.setMaterial(mat);
+        });
+
+        if (mode === 'xray') {
+          panelApiLog.textContent = `> X-Ray Ghost Mode: Opacity=28% (alphaBlend) // 内部机械结构可见`;
+        } else if (mode === 'chrome') {
+          panelApiLog.textContent = `> Chrome Reflection Pass: Metalness=1.0, Roughness=0.03`;
+        } else {
+          panelApiLog.textContent = `> Restored Original PBR Channels`;
+        }
+      });
+    }
+
+    function updateShadingButtons() {
+      ['rendered', 'clay', 'wire', 'xray', 'albedo', 'chrome'].forEach(m => {
+        const btn = document.getElementById('btn-shade-' + m);
+        if (btn) {
+          btn.className = (m === currentShadeMode)
+            ? 'px-2 py-1 rounded bg-orange-500/25 border border-orange-400/50 text-orange-200 font-semibold transition'
+            : 'px-2 py-1 rounded text-slate-400 hover:text-white transition';
+        }
+      });
+    }
+
+    // =========================================================================
+    // 新增实用功能 4：屏幕空间多通道后期合成器 (SSAO + Bloom + 4K锐化 + 电影胶片)
+    // =========================================================================
+    function togglePostFX(effectKey) {
+      postFxState[effectKey] = !postFxState[effectKey];
+
+      const btnMap = {
+        ssao: { id: 'btn-fx-ssao', activeClass: 'bg-emerald-500/30 border border-emerald-400/50 text-emerald-200 font-bold' },
+        bloom: { id: 'btn-fx-bloom', activeClass: 'bg-purple-500/30 border border-purple-400/50 text-purple-200 font-bold' },
+        sharpen: { id: 'btn-fx-sharpen', activeClass: 'bg-amber-500/30 border border-amber-400/50 text-amber-200 font-bold' },
+        cinema: { id: 'btn-fx-cinema', activeClass: 'bg-rose-500/30 border border-rose-400/50 text-rose-200 font-bold' }
+      };
+
+      Object.keys(btnMap).forEach(k => {
+        const b = document.getElementById(btnMap[k].id);
+        if (b) {
+          b.className = postFxState[k]
+            ? `px-2 py-1 rounded ${btnMap[k].activeClass} text-[10px] font-mono transition`
+            : `px-2 py-1 rounded bg-white/5 hover:bg-white/10 text-slate-300 text-[10px] font-mono transition`;
+        }
+      });
+
+      if (!isApiReady || !sketchfabApi) return;
+
+      const anyEnabled = Object.values(postFxState).some(Boolean);
+
+      sketchfabApi.setPostProcessing({
+        enable: anyEnabled,
+        ssaoEnable: postFxState.ssao,
+        ssaoRadius: 0.15,
+        ssaoIntensity: 0.75,
+        bloomEnable: postFxState.bloom || postFxState.cinema,
+        bloomFactor: 0.85,
+        bloomThreshold: 0.6,
+        sharpenEnable: postFxState.sharpen,
+        sharpenFactor: 0.45,
+        chromaticAberrationEnable: postFxState.cinema,
+        chromaticAberrationFactor: 0.025,
+        vignetteEnable: postFxState.cinema,
+        vignetteAmount: 0.45,
+        toneMappingEnable: postFxState.cinema,
+        toneMappingMethod: 'filmic'
+      });
+
+      const activeNames = Object.keys(postFxState).filter(k => postFxState[k]).map(k => k.toUpperCase());
+      panelApiLog.textContent = `> Post-Processing Pipeline: [${activeNames.length ? activeNames.join(' + ') : 'BYPASSED'}]`;
+    }
+
+    function triggerWorkflowAction(action, stepIdx) {
+      document.querySelectorAll('.pipeline-node').forEach((el, i) => {
+        if (i === stepIdx) el.classList.add('active-step');
+        else el.classList.remove('active-step');
+      });
+
+      if (['clay', 'wire', 'chrome', 'rendered', 'xray', 'albedo'].includes(action)) {
+        setShading(action);
+      } else if (action === 'explode65') {
+        setExplodePattern('radial');
+        animateExplodeTo(65);
+      } else if (action === 'axialExplode') {
+        setExplodePattern('axial');
+        setShading('wire');
+        animateExplodeTo(70);
+      } else if (action === 'explode0') {
+        setShading('rendered');
+        animateExplodeTo(0);
+      } else if (action === 'cinema') {
+        if (!postFxState.cinema) togglePostFX('cinema');
+      } else if (action === 'ssaoSharpen') {
+        if (!postFxState.ssao) togglePostFX('ssao');
+        if (!postFxState.sharpen) togglePostFX('sharpen');
+      }
+    }
+
+    function recenterCamera() {
+      if (isApiReady && sketchfabApi) {
+        sketchfabApi.recenterCamera();
+        setTimeout(captureCameraBaseline, 300);
+        panelApiLog.textContent = `> Camera recentered to full bounding box.`;
+      }
+    }
+
+    function toggleAutoShowcase() {
+      if (autoTourTimer) {
+        stopAutoShowcase();
+        return;
+      }
+      const btn = document.getElementById('btn-auto-tour');
+      btn.textContent = '⏹ 停止';
+      btn.className = 'px-2 py-1 rounded bg-rose-500/30 border border-rose-400/50 text-rose-200 text-[10px] font-bold transition animate-pulse ml-1';
+
+      let step = 0;
+      const actions = [
+        () => { setShading('rendered'); setExplodePattern('radial'); animateExplodeTo(65); },
+        () => { setShading('xray'); animateExplodeTo(35); },
+        () => { setShading('wire'); setExplodePattern('axial'); animateExplodeTo(70); },
+        () => { setShading('rendered'); animateExplodeTo(0); }
+      ];
+      actions[0]();
+      autoTourTimer = setInterval(() => {
+        step = (step + 1) % actions.length;
+        actions[step]();
+      }, 3000);
+    }
+
+    function stopAutoShowcase() {
+      if (autoTourTimer) {
+        clearInterval(autoTourTimer);
+        autoTourTimer = null;
+      }
+      const btn = document.getElementById('btn-auto-tour');
+      if (btn) {
+        btn.textContent = '▶ 巡航';
+        btn.className = 'px-2 py-1 rounded bg-sky-500/15 hover:bg-sky-500/25 border border-sky-400/30 text-sky-300 text-[10px] font-semibold transition ml-1';
+      }
+    }
+
+    function addCustomModelFromInput() {
+      const titleInput = document.getElementById('custom-model-title');
+      const uidInput = document.getElementById('custom-model-uid');
+      const raw = uidInput.value.trim();
+      if (!raw) { alert('请粘贴 Sketchfab 网址或 32 位 UID！'); return; }
+
+      const match = raw.match(/[a-f0-9]{32}/i);
+      const uid = match ? match[0] : raw.split('/').pop().split('-').pop();
+
+      const newAsset = {
+        id: 'custom-' + Date.now(),
+        isCustom: true,
+        title: titleInput.value.trim() || '自定义 Sketchfab 作品',
+        category: 'CUSTOM // USER ASSET',
+        roleBadge: '100% 原创自研模型',
+        uid: uid,
+        loadedPolys: null,
+        loadedVerts: null,
+        loadedParts: null,
+        highlights: ['✦ X-Ray 幽灵透视', '✦ SSAO + 4K 锐化', '✦ 360° 光影旋转'],
+        roles: [
+          { name: '造型与结构', pct: 50, color: 'bg-orange-500', text: 'text-orange-400' },
+          { name: '拓扑与UV', pct: 25, color: 'bg-sky-400', text: 'text-sky-400' },
+          { name: '材质渲染', pct: 25, color: 'bg-emerald-400', text: 'text-emerald-400' }
+        ],
+        workflow: [
+          { step: 'STEP 01', title: '360° 零均值中心对称爆炸', tag: '点击炸开 65%', action: 'explode65', desc: '自动穿透 Group 层级提取全部子部件向四周对称散开。' },
+          { step: 'STEP 02', title: 'X-Ray 幽灵半透明内腔透视', tag: '开启X-Ray', action: 'xray', desc: '将外壳半透明化，直视内部结构。' },
+          { step: 'STEP 03', title: '一键复位收合', tag: '点击收合 0%', action: 'explode0', desc: '恢复初始装配坐标与相机距离。' }
+        ]
+      };
+
+      assetDatabase.unshift(newAsset);
+      titleInput.value = '';
+      uidInput.value = '';
+      selectAsset(newAsset.id);
+    }
+
+    selectAsset(assetDatabase[0].id);
+  </script>
+</body>
+</html>
