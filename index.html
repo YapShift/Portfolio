@@ -1,4 +1,405 @@
-  <!-- 按顺序引入解耦后的 3 个模块文件 -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>YAPSHIFT // 3D HARD-SURFACE & TECHNICAL ART SHOWREEL</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Anime.js 官方物理动效引擎 -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/animejs/3.2.2/anime.min.js"></script>
+  <!-- Sketchfab 官方 Viewer API -->
+  <script src="https://static.sketchfab.com/api/sketchfab-viewer-1.12.1.js"></script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:ital,wght@0,500;0,600;0,700;1,700&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+    :root {
+      --accent: #f5792a;
+      --accent-cyan: #38bdf8;
+      --bg-dark: #05070b;
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      background-color: var(--bg-dark);
+      font-family: 'JetBrains Mono', monospace;
+      color: #e2e8f0;
+      overflow: hidden;
+      user-select: none;
+    }
+    .font-header { font-family: 'Chakra Petch', sans-serif; }
+
+    ::-webkit-scrollbar { width: 4px; height: 4px; }
+    ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.14); border-radius: 2px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+    /* Aceternity UI 风格：鼠标跟随径向聚光灯卡片 (Spotlight Card) */
+    .spotlight-card {
+      position: relative;
+      overflow: hidden;
+      background: rgba(13, 18, 29, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.07);
+      transition: border-color 0.25s ease, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+    .spotlight-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: radial-gradient(
+        320px circle at var(--mouse-x, -500px) var(--mouse-y, -500px),
+        rgba(245, 121, 42, 0.16),
+        transparent 70%
+      );
+      pointer-events: none;
+      z-index: 1;
+    }
+    .spotlight-card:hover {
+      border-color: rgba(245, 121, 42, 0.45);
+    }
+    .spotlight-card.active {
+      border-color: var(--accent);
+      background: linear-gradient(135deg, rgba(245, 121, 42, 0.18) 0%, rgba(12, 17, 28, 0.95) 100%);
+      box-shadow: 0 10px 28px -8px rgba(245, 121, 42, 0.4), inset 3px 0 0 var(--accent);
+    }
+
+    /* Uiverse / Aceternity 流光旋转边框按钮 */
+    @keyframes spinConic {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .uiverse-cta {
+      position: relative;
+      overflow: hidden;
+      padding: 2px;
+      border-radius: 9999px;
+      background: rgba(255,255,255,0.08);
+      cursor: pointer;
+      transition: transform 0.25s ease, box-shadow 0.25s ease;
+    }
+    .uiverse-cta::before {
+      content: '';
+      position: absolute;
+      inset: -120%;
+      background: conic-gradient(from 0deg, transparent 55%, #38bdf8 75%, #f5792a 100%);
+      animation: spinConic 3.2s linear infinite;
+    }
+    .uiverse-cta:hover {
+      transform: scale(1.04);
+      box-shadow: 0 0 35px rgba(245, 121, 42, 0.45);
+    }
+    .uiverse-cta-inner {
+      position: relative;
+      z-index: 2;
+      background: #090d16;
+      border-radius: 9999px;
+    }
+
+    /* 背景极光网格 */
+    .aurora-bg {
+      background-image:
+        radial-gradient(ellipse 80% 50% at 50% -15%, rgba(245, 121, 42, 0.18), transparent),
+        radial-gradient(ellipse 60% 40% at 85% 100%, rgba(56, 189, 248, 0.12), transparent),
+        linear-gradient(to right, rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+        linear-gradient(to bottom, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
+      background-size: 100% 100%, 100% 100%, 28px 28px, 28px 28px;
+    }
+
+    .pipeline-node { transition: all 0.2s ease; cursor: pointer; }
+    .pipeline-node:hover { border-color: rgba(56, 189, 248, 0.6); background: rgba(56, 189, 248, 0.08); transform: translateY(-1px); }
+    .pipeline-node.active-step { border-color: var(--accent); background: rgba(245, 121, 42, 0.15); }
+
+    .hud-bracket { position: absolute; width: 16px; height: 16px; border-color: rgba(245, 121, 42, 0.55); pointer-events: none; z-index: 10; }
+
+    @keyframes scanBlink { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; color: #38bdf8; } }
+    .telemetry-scanning { animation: scanBlink 0.9s infinite ease-in-out; }
+
+    input[type="range"].studio-slider {
+      -webkit-appearance: none; appearance: none; height: 5px;
+      background: linear-gradient(90deg, rgba(245,121,42,0.45), rgba(56,189,248,0.45));
+      border-radius: 3px; outline: none;
+    }
+    input[type="range"].studio-slider::-webkit-slider-thumb {
+      -webkit-appearance: none; appearance: none; width: 14px; height: 14px; border-radius: 3px;
+      background: var(--accent); border: 2px solid #fff; cursor: pointer; transform: rotate(45deg);
+      box-shadow: 0 0 10px var(--accent);
+    }
+    input[type="range"].studio-slider:disabled { opacity: 0.3; cursor: not-allowed; }
+  </style>
+</head>
+<body class="h-screen w-screen flex flex-col aurora-bg relative">
+
+  <!-- =========================================================================
+       STAGE 01: 点进网站第一眼看到的「YAPSHIFT 电影级 Showreel 序幕层」
+       ========================================================================= -->
+  <div id="hero-showreel-overlay" class="fixed inset-0 z-50 flex flex-col justify-between p-8 bg-[#05070c]/85 backdrop-blur-xl transition-opacity duration-500">
+    <div id="hero-spotlight" class="pointer-events-none fixed inset-0 z-0" style="background: radial-gradient(600px circle at 50% 40%, rgba(245, 121, 42, 0.14), transparent 70%);"></div>
+
+    <!-- 序幕顶部品牌栏 -->
+    <div class="relative z-10 flex items-center justify-between border-b border-white/10 pb-4">
+      <div class="flex items-center gap-3">
+        <div class="w-3.5 h-3.5 bg-[#f5792a] rotate-45 shadow-[0_0_12px_#f5792a]"></div>
+        <span class="font-header font-bold tracking-widest text-sm text-white">YAPSHIFT // PORTFOLIO SHOWREEL</span>
+        <span class="text-[10px] px-2 py-0.5 rounded bg-orange-500/15 text-orange-300 border border-orange-500/30 font-mono">2025 EDITION</span>
+      </div>
+      <div class="flex items-center gap-4 text-xs font-mono text-slate-400">
+        <span class="flex items-center gap-1.5"><span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> WEBGL ENGINE ONLINE</span>
+        <a href="https://yapshift.github.io/Portfolio/" target="_blank" class="text-sky-400 hover:underline">yapshift.github.io/Portfolio ↗</a>
+      </div>
+    </div>
+
+    <!-- 序幕中央：视觉冲击主舞台 -->
+    <div class="relative z-10 max-w-4xl mx-auto text-center space-y-6 my-auto">
+      <div class="inline-flex items-center gap-2 px-3.5 py-1 rounded-full bg-white/5 border border-white/10 text-[11px] text-orange-300 font-mono">
+        <span>⚡ INTERACTIVE 3D ASSET & PARAMETRIC ENGINEERING</span>
+      </div>
+
+      <h1 class="font-header text-5xl md:text-7xl font-bold tracking-tight text-white leading-none">
+        <span id="hero-scramble-name" class="text-transparent bg-clip-text bg-gradient-to-r from-white via-orange-200 to-orange-500">YAPSHIFT</span>
+        <span class="block text-xl md:text-2xl font-medium text-slate-300 mt-3 tracking-widest uppercase" id="hero-scramble-sub">
+          ARCHITECTING PRECISION 3D & WEBGL EXPERIENCES
+        </span>
+      </h1>
+
+      <p class="max-w-2xl mx-auto text-xs md:text-sm text-slate-400 leading-relaxed font-mono">
+        不局限于静态渲染图——在这里，你可以直接实时接管我的 3D 资产：执行<b class="text-orange-300">零漂移对称爆炸拆解</b>、穿透检视 <b class="text-sky-300">X-Ray 内部机械公差</b>、切换 <b class="text-emerald-300">拓扑布线与电影级胶片后期</b>。
+      </p>
+
+      <!-- 3 张 Bento 核心价值名片 -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-3.5 pt-2 text-left">
+        <div class="spotlight-card rounded-2xl p-4 space-y-1.5 hero-bento-item">
+          <div class="flex items-center justify-between text-[10px] font-mono text-orange-400">
+            <span>01 // HARD-SURFACE</span>
+            <span>96% PROFICIENCY</span>
+          </div>
+          <div class="text-sm font-bold text-white font-header">影视/游戏级硬表面与拓扑</div>
+          <div class="text-[11px] text-slate-400 leading-relaxed">严格四边面卡线、高低模烘焙与 4K Substance 多层金属做旧质感。</div>
+        </div>
+
+        <div class="spotlight-card rounded-2xl p-4 space-y-1.5 hero-bento-item">
+          <div class="flex items-center justify-between text-[10px] font-mono text-sky-400">
+            <span>02 // PARAMETRIC CAD</span>
+            <span>0.15MM TOLERANCE</span>
+          </div>
+          <div class="text-sm font-bold text-white font-header">OpenSCAD & 3D 打印机械工程</div>
+          <div class="text-[11px] text-slate-400 leading-relaxed">主导 MGN12H 线性导轨与 BMG 挤出机模块化打印头参数化研发落地。</div>
+        </div>
+
+        <div class="spotlight-card rounded-2xl p-4 space-y-1.5 hero-bento-item">
+          <div class="flex items-center justify-between text-[10px] font-mono text-emerald-400">
+            <span>03 // TECHNICAL ART</span>
+            <span>DECOUPLED WEBGL</span>
+          </div>
+          <div class="text-sm font-bold text-white font-header">实时 3D 交互与全栈产品化</div>
+          <div class="text-[11px] text-slate-400 leading-relaxed">自研场景树深度扫描拆解算法与 JK AI 交互式教育系统前端工程。</div>
+        </div>
+      </div>
+
+      <!-- Uiverse 流光核心触发按钮 -->
+      <div class="pt-4 flex flex-col items-center gap-3">
+        <button data-action="enter-workbench" class="uiverse-cta">
+          <div class="uiverse-cta-inner px-8 py-3.5 flex items-center gap-3 text-sm font-bold font-header tracking-wider text-white">
+            <span class="w-2.5 h-2.5 rounded-full bg-orange-500 animate-ping"></span>
+            <span>LAUNCH 3D WORKBENCH // 进入实时 3D 检视工作站</span>
+            <span class="text-orange-400">➔</span>
+          </div>
+        </button>
+        <span class="text-[10px] text-slate-500 font-mono">提示：后台已为您同步预加载 3D 机械总成，点击即可零延迟操控</span>
+      </div>
+    </div>
+
+    <!-- 序幕底部跑马灯指标栏 -->
+    <div class="relative z-10 border-t border-white/10 pt-4 flex items-center justify-between text-[11px] font-mono text-slate-400">
+      <div>DESIGNED & ENGINEERED BY <b class="text-white">YAPSHIFT</b></div>
+      <div class="flex items-center gap-5">
+        <span>✦ BLENDER 4.2</span>
+        <span>✦ OPENSCAD</span>
+        <span>✦ SUBSTANCE 3D</span>
+        <span>✦ SKETCHFAB API</span>
+        <span>✦ ANIME.JS</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================================
+       STAGE 02: 解耦式 3D 实时后处理与遥测工作台 (主界面)
+       ========================================================================= -->
+  <header class="h-14 border-b border-white/10 bg-[#090c14]/90 backdrop-blur-md px-6 flex items-center justify-between shrink-0 z-20">
+    <div class="flex items-center gap-3">
+      <div class="w-3 h-3 bg-[#f5792a] rotate-45 shadow-[0_0_10px_#f5792a]"></div>
+      <span class="font-header font-bold tracking-wider text-sm text-white">YAPSHIFT // 3D INTERACTIVE WORKBENCH</span>
+      <span class="text-[10px] px-2 py-0.5 bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 rounded font-mono">
+        SHOWREEL v7.0
+      </span>
+    </div>
+    <div class="flex items-center gap-2.5 text-xs font-mono">
+      <button data-action="open-showreel" class="px-3 py-1 rounded-full bg-white/5 hover:bg-white/15 border border-white/10 text-slate-200 text-[11px] transition flex items-center gap-1">
+        <span>🎬 序幕介绍 (Intro)</span>
+      </button>
+      <div class="bg-[#101522] border border-white/10 rounded-full px-3 py-1 flex items-center gap-2">
+        <span id="telemetry-dot" class="w-2 h-2 rounded-full bg-amber-400 animate-ping"></span>
+        <span id="top-active-name" class="text-white font-bold text-[11px]">INITIALIZING...</span>
+      </div>
+      <button data-action="screenshot" class="px-3 py-1 rounded-full bg-sky-500/15 hover:bg-sky-500/30 border border-sky-500/40 text-sky-300 text-[11px] font-bold transition">
+        📸 截图导出
+      </button>
+      <button data-action="switch-tab" data-tab="profile" class="px-3 py-1 rounded-full bg-orange-500/15 hover:bg-orange-500/30 border border-orange-500/40 text-orange-300 text-[11px] font-bold transition">
+        ⚡ YapShift 履历雷达
+      </button>
+    </div>
+  </header>
+
+  <main class="flex-1 flex overflow-hidden">
+
+    <!-- 左栏：Spotlight 聚光灯多模型矩阵 -->
+    <section class="w-80 border-r border-white/10 bg-[#080b11]/90 flex flex-col justify-between shrink-0 z-10">
+      <div class="p-3.5 border-b border-white/10 flex items-center justify-between">
+        <span class="text-[11px] font-bold text-slate-200 font-header tracking-wider uppercase">作品矩阵 (Asset Matrix)</span>
+        <span id="gallery-count" class="text-[10px] px-1.5 py-0.5 rounded bg-white/5 text-orange-400 font-mono"></span>
+      </div>
+      <div id="asset-list-container" class="flex-1 overflow-y-auto p-3 space-y-2.5"></div>
+      <div class="p-3.5 border-t border-white/10 bg-[#0b0f18] space-y-2 shrink-0">
+        <div class="text-[10px] font-bold text-orange-400 font-header uppercase">+ 接入你的 Sketchfab 资产</div>
+        <input id="custom-model-title" type="text" placeholder="作品名 (留空自动读取官方标题)" class="w-full bg-[#121826] border border-white/10 rounded px-2.5 py-1.5 text-xs text-white outline-none" />
+        <div class="flex gap-1.5">
+          <input id="custom-model-uid" type="text" placeholder="粘贴 Sketchfab 链接或 UID..." class="flex-1 bg-[#121826] border border-white/10 rounded px-2.5 py-1.5 text-[11px] text-white outline-none font-mono" />
+          <button data-action="add-custom" class="px-3 py-1.5 bg-orange-500 hover:bg-orange-400 text-black rounded text-xs font-bold transition">载入</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 中栏：唯一焦点 3D 视口 + 工业级后处理矩阵 -->
+    <section class="flex-1 flex flex-col relative bg-[#04060a]">
+      <div class="h-12 border-b border-white/10 bg-[#0b0f17] px-4 flex items-center justify-between z-10 shrink-0 gap-2 overflow-x-auto">
+        <div id="shader-toolbar" class="flex items-center gap-1 text-[11px] shrink-0"></div>
+        <div id="postfx-toolbar" class="flex items-center gap-1 shrink-0"></div>
+      </div>
+
+      <div class="flex-1 relative w-full bg-[#05070c] overflow-hidden">
+        <div class="hud-bracket top-3 left-3 border-t-2 border-l-2"></div>
+        <div class="hud-bracket top-3 right-3 border-t-2 border-r-2"></div>
+        <div class="hud-bracket bottom-3 left-3 border-b-2 border-l-2"></div>
+        <div class="hud-bracket bottom-3 right-3 border-b-2 border-r-2"></div>
+
+        <div class="absolute top-5 left-5 z-10 pointer-events-none flex flex-col gap-1.5">
+          <div class="bg-[#090d16]/85 border border-white/10 backdrop-blur-md px-3.5 py-2 rounded-lg flex items-center gap-3">
+            <div>
+              <div class="text-[9px] text-slate-400 uppercase font-mono">YAPSHIFT TELEMETRY</div>
+              <div id="hud-model-title" class="text-xs font-bold text-white font-header">...</div>
+            </div>
+            <div class="h-6 w-[1px] bg-white/10"></div>
+            <div class="font-mono text-[11px]">
+              <span class="text-orange-400 font-bold" id="hud-nodes-badge">--</span>
+              <span class="text-slate-400 text-[10px]" id="hud-explode-mode">READY</span>
+            </div>
+          </div>
+          <div id="cam-impulse-toast" class="opacity-0 transition-opacity duration-300 bg-sky-500/20 border border-sky-400/40 backdrop-blur-md px-2.5 py-1 rounded text-[10px] text-sky-200 font-mono">
+            🎥 零偏心对称拆解中：相机已自动退后容纳全零件（松手后可自由滚轮缩放）
+          </div>
+        </div>
+
+        <div id="loading-overlay" class="absolute inset-0 z-20 bg-[#06080d]/90 backdrop-blur-sm flex flex-col items-center justify-center gap-3 transition-opacity duration-300 opacity-0 pointer-events-none">
+          <div class="w-10 h-10 border-2 border-orange-500 border-t-transparent rounded-full animate-spin"></div>
+          <div id="loading-text" class="text-xs text-orange-300 font-mono tracking-wider">SYNCING SCENE-GRAPH...</div>
+        </div>
+
+        <iframe id="sketchfab-viewport-frame" class="w-full h-full border-0" allow="autoplay; fullscreen; xr-spatial-tracking" allowfullscreen></iframe>
+      </div>
+
+      <!-- 底部双轨控制坞 -->
+      <div class="h-14 border-t border-white/10 bg-[#0b0f17] px-5 flex items-center justify-between gap-4 z-10 shrink-0">
+        <div class="flex items-center gap-2.5 flex-1">
+          <span id="explode-label-text" class="text-xs font-bold text-white whitespace-nowrap font-header">对称爆炸</span>
+          <div class="flex items-center bg-[#121826] p-0.5 rounded border border-white/10 text-[10px] font-mono shrink-0">
+            <button data-action="explode-pattern" data-pattern="radial" id="btn-pat-radial" class="px-2 py-0.5 rounded bg-orange-500/30 text-orange-200 font-bold">360°球面</button>
+            <button data-action="explode-pattern" data-pattern="axial" id="btn-pat-axial" class="px-2 py-0.5 rounded text-slate-400">机械轴向</button>
+          </div>
+          <input id="explode-slider" type="range" min="0" max="100" value="0" class="studio-slider flex-1 cursor-pointer" />
+          <button data-action="explode-to" data-val="0" class="px-2 py-0.5 rounded bg-white/5 hover:bg-white/15 text-[10px] text-slate-300 font-mono">0%</button>
+          <button data-action="explode-to" data-val="65" id="btn-quick-explode" class="px-2 py-0.5 rounded bg-orange-500/20 text-[10px] text-orange-300 font-mono">65%</button>
+          <span id="explode-percent" class="text-xs font-mono font-bold text-orange-400 w-9 text-right">0%</span>
+        </div>
+        <div class="h-6 w-[1px] bg-white/10"></div>
+        <div class="flex items-center gap-2 w-60 shrink-0">
+          <span class="text-[11px] font-bold text-sky-300 whitespace-nowrap font-header">☀️ 光影旋转</span>
+          <input id="light-rot-slider" type="range" min="0" max="360" value="0" class="studio-slider flex-1 cursor-pointer" />
+          <span id="light-rot-deg" class="text-[11px] font-mono text-sky-400 w-9 text-right">0°</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- 右栏：作品遥测与 YapShift 个人能力雷达 -->
+    <section class="w-[420px] border-l border-white/10 bg-[#080b12] flex flex-col shrink-0 z-10">
+      <div class="p-2.5 bg-[#0c101a] border-b border-white/10 grid grid-cols-2 gap-2 text-xs font-bold font-header">
+        <button id="tab-btn-model" data-action="switch-tab" data-tab="model" class="py-2 rounded-lg border bg-orange-500/20 border-orange-500/50 text-orange-200">
+          🧩 作品遥测与子件诊断
+        </button>
+        <button id="tab-btn-profile" data-action="switch-tab" data-tab="profile" class="py-2 rounded-lg border border-transparent text-slate-400 hover:text-white">
+          📊 YapShift 雷达 & 履历
+        </button>
+      </div>
+
+      <div id="tab-panel-model" class="flex-1 overflow-y-auto p-5 space-y-4">
+        <div>
+          <div class="flex items-center justify-between">
+            <span id="panel-category" class="text-[10px] text-orange-400 font-bold font-mono uppercase"></span>
+            <span id="panel-role-badge" class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 font-mono"></span>
+          </div>
+          <h2 id="panel-title" class="text-lg font-bold text-white font-header mt-1"></h2>
+          <div id="panel-highlights" class="flex flex-wrap gap-1.5 mt-2"></div>
+        </div>
+
+        <div class="space-y-1.5">
+          <div class="flex items-center justify-between text-[10px] font-mono">
+            <span class="text-slate-400">REAL-TIME GEOMETRY SPECS</span>
+            <span id="telemetry-status-tag" class="text-sky-400 telemetry-scanning"></span>
+          </div>
+          <div class="grid grid-cols-3 gap-2 text-center">
+            <div class="spotlight-card rounded-xl p-2.5">
+              <div class="text-[9px] text-slate-500">真实三角面 (Tris)</div>
+              <div id="spec-polys" class="text-sm font-bold text-white font-mono mt-0.5"></div>
+            </div>
+            <div class="spotlight-card rounded-xl p-2.5">
+              <div class="text-[9px] text-slate-500">真实顶点数 (Verts)</div>
+              <div id="spec-verts" class="text-sm font-bold text-white font-mono mt-0.5"></div>
+            </div>
+            <div class="spotlight-card rounded-xl p-2.5">
+              <div class="text-[9px] text-slate-500">识别子部件数</div>
+              <div id="spec-mats" class="text-sm font-bold text-emerald-300 font-mono mt-0.5"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="bg-[#0c111d] border border-sky-500/25 rounded-xl p-3 space-y-2">
+          <div class="flex items-center justify-between">
+            <span class="text-[11px] font-bold text-sky-300 font-header uppercase">🌳 场景树子部件诊断器</span>
+            <span id="part-strategy-badge" class="text-[9px] px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300 font-mono"></span>
+          </div>
+          <div id="subpart-inspector-list" class="max-h-32 overflow-y-auto space-y-1 pr-1 font-mono text-[10px]"></div>
+        </div>
+
+        <div class="spotlight-card rounded-xl p-3 space-y-2">
+          <div class="text-[11px] font-bold text-slate-200 font-header uppercase">⚡ YapShift 研发工时占比</div>
+          <div id="role-bar-container" class="h-2 w-full rounded-full overflow-hidden flex bg-black/40 p-0.5 gap-0.5"></div>
+          <div id="role-legend-container" class="grid grid-cols-3 gap-1.5 pt-0.5 text-[10px] font-mono"></div>
+        </div>
+
+        <div class="space-y-1.5">
+          <div class="text-[11px] font-bold text-slate-300 uppercase font-header">🎯 点击步骤触发 3D 检视</div>
+          <div id="panel-workflow" class="space-y-1.5"></div>
+        </div>
+
+        <div class="bg-[#0b0f19] border border-orange-500/25 rounded-xl p-2.5 text-[10px] font-mono">
+          <div class="text-orange-400 font-bold mb-0.5">&gt;_ YAPSHIFT ENGINE BUS LOG</div>
+          <div id="panel-api-log" class="text-emerald-300/90 truncate"></div>
+        </div>
+      </div>
+
+      <!-- YapShift 个人能力雷达面板 -->
+      <div id="tab-panel-profile" class="flex-1 overflow-y-auto p-5 space-y-5 hidden"></div>
+    </section>
+  </main>
+
+  <!-- 依次引入解耦后的 3 个独立 JS 模块 -->
   <script src="./config.js"></script>
   <script src="./scene-math.js"></script>
   <script src="./app-engine.js"></script>
