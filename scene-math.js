@@ -1,15 +1,13 @@
 /**
- * 纯 3D 场景树递归、六向正交朝外爆炸与简易方框 Hitbox (AABB) 防重叠解算模块 (scene-math.js v12.0)
- * 核心特性：
- *  1. 严格限制爆炸方向为【上(+Y)、下(-Y)、左(-X)、右(+X)、前(+Z)、后(-Z)】6 个正交朝外方向
- *  2. 为每个子部件自动生成简易方框型代理碰撞盒 (3D Proxy Box Hitbox / AABB)
- *  3. 内置多轮 AABB 方框碰撞检测与朝外排斥解算器 (Box-Box Intersection & Outward MTD Solver)，确保爆炸后零件互不穿插重叠
- *  4. 温和紧凑的爆炸幅度控制 + 对称质心校准，绝不飞散出界
+ * 纯 3D 场景树递归、六向正交朝外爆炸与实时逐帧方框 Hitbox (AABB) 防重叠解算模块 (scene-math.js v13.0)
+ * 核心升级：
+ *  1. 由外向内“剥洋葱”分段拆解时序 (Outside-In Staggered Schedule)：外层零件率先起步腾出空间，内层零件随后跟进，彻底杜绝中途追尾穿模
+ *  2. 实时逐帧方框 Hitbox (AABB) 碰撞解算 (evaluateExplosionFrame)：在 1%~100% 的任意滑块进度下，实时检测并沿正交朝外轴排斥任何重叠的简易方框 Hitbox！
+ *  3. 严格限制爆炸方向为【上(+Y)、下(-Y)、左(-X)、右(+X)、前(+Z)、后(-Z)】6 个正交朝外方向
  */
 window.SceneGraphMath = {
   IGNORE_NAME_RE: /^(root|scene|world|ground|floor|plane|shadow|stage|backdrop|camera|light|env|sky|grid|base_plane|shadow_plane|sketchfab_model|gltf_scene)/i,
 
-  // 严格定义的 6 个正交朝外标准方向（右、左、上、下、前、后）
   CARDINAL_6_AXES: [
     { id: '+X', label: '右(+X)', vec: [ 1,  0,  0], axisIdx: 0, sign:  1 },
     { id: '-X', label: '左(-X)', vec: [-1,  0,  0], axisIdx: 0, sign: -1 },
@@ -30,16 +28,15 @@ window.SceneGraphMath = {
     });
   },
 
-  // 从 4x4 矩阵提取各轴缩放尺寸 [sx, sy, sz]
   extractMatrixScale(m) {
     if (!m || m.length < 11) return [1, 1, 1];
-    const sx = Math.hypot(m[0], m[1], m[2]) || 1;
-    const sy = Math.hypot(m[4], m[5], m[6]) || 1;
-    const sz = Math.hypot(m[8], m[9], m[10]) || 1;
-    return [sx, sy, sz];
+    return [
+      Math.hypot(m[0], m[1], m[2]) || 1,
+      Math.hypot(m[4], m[5], m[6]) || 1,
+      Math.hypot(m[8], m[9], m[10]) || 1
+    ];
   },
 
-  // 检测两个 3D 简易方框型 Hitbox (AABB) 是否发生重叠，并返回各轴重叠深度
   checkBoxHitboxOverlap(posA, halfA, posB, halfB, padding = 1.08) {
     const ox = (halfA[0] + halfB[0]) * padding - Math.abs(posA[0] - posB[0]);
     if (ox <= 0) return null;
@@ -50,10 +47,12 @@ window.SceneGraphMath = {
     return [ox, oy, oz];
   },
 
-  /**
-   * 为所有部件分配严格的【上下左右前后】6向正交朝外方向
-   * 若部件自带空间偏移，则顺应其离中心最显著的外推正交轴；同时自动均衡各轴负载
-   */
+  smoothstep(edge0, edge1, x) {
+    if (edge1 <= edge0) return x >= edge1 ? 1 : 0;
+    const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
+    return t * t * (3 - 2 * t);
+  },
+
   assignOrthogonalOutwardAxes(extracted, center, maxSpread) {
     const count = extracted.length;
     const axisCounts = [0, 0, 0, 0, 0, 0];
@@ -72,8 +71,7 @@ window.SceneGraphMath = {
 
         this.CARDINAL_6_AXES.forEach((ax, aIdx) => {
           const dot = rel[0] * ax.vec[0] + rel[1] * ax.vec[1] + rel[2] * ax.vec[2];
-          const crowdPenalty = axisCounts[aIdx] * 0.22;
-          const score = dot - crowdPenalty;
+          const score = dot - axisCounts[aIdx] * 0.22;
           if (dot > 0.05 && score > bestScore) {
             bestScore = score;
             bestAxis = aIdx;
@@ -92,23 +90,8 @@ window.SceneGraphMath = {
     return assignments;
   },
 
-  /**
-   * 简易方框型 Hitbox (AABB) 防重叠解算器：
-   * 零件仅沿其被分配的正交朝外轴 (上下左右前后) 移动，若检测到两个方框 Hitbox 重叠，
-   * 自动将外侧零件沿其正交朝外方向继续推开最小分离距离 (MTD)，确保爆炸后零件间无穿插重叠
-   */
-  solveOrthogonalHitboxExplosion(extracted, center, baseStep, mode = 'cardinal6') {
+  buildScheduleAndTargets(extracted, center, baseStep, mode = 'cardinal6') {
     const count = extracted.length;
-    const boxHalves = extracted.map(p => {
-      const s = p.localScale || [1, 1, 1];
-      const norm = Math.cbrt(s[0] * s[1] * s[2]) || 1;
-      const rx = Math.max(0.55, Math.min(1.6, s[0] / norm));
-      const ry = Math.max(0.55, Math.min(1.6, s[1] / norm));
-      const rz = Math.max(0.55, Math.min(1.6, s[2] / norm));
-      const unitBox = baseStep * 0.22;
-      return [unitBox * rx, unitBox * ry, unitBox * rz];
-    });
-
     const dirs = extracted.map((p, idx) => {
       if (mode === 'axial') {
         const sign = idx % 2 === 0 ? 1 : -1;
@@ -117,8 +100,11 @@ window.SceneGraphMath = {
       return p.cardinalAxis.vec.slice();
     });
 
-    const distances = new Array(count).fill(0);
+    const targetDists = new Array(count).fill(0);
+    const startTs = new Array(count).fill(0);
+    const endTs = new Array(count).fill(1);
     const groupsByDir = {};
+
     extracted.forEach((p, idx) => {
       const key = dirs[idx].join(',');
       if (!groupsByDir[key]) groupsByDir[key] = [];
@@ -129,14 +115,47 @@ window.SceneGraphMath = {
 
     Object.values(groupsByDir).forEach(list => {
       list.sort((a, b) => a.proj - b.proj);
+      const len = list.length;
       list.forEach((item, rank) => {
-        const tierRatio = (rank + 1) / list.length;
-        distances[item.idx] = baseStep * (0.32 + 0.58 * tierRatio);
+        const tierRatio = (rank + 1) / len;
+        targetDists[item.idx] = baseStep * (0.30 + 0.60 * tierRatio);
+
+        // 由外向内“剥洋葱”分段拆解时序：最外层 t=0.00 先起步，最内层等外层腾出空间后才起步
+        const outerRatio = len > 1 ? (len - 1 - rank) / (len - 1) : 0;
+        startTs[item.idx] = outerRatio * 0.36;
+        endTs[item.idx] = Math.min(1.0, startTs[item.idx] + 0.64);
       });
     });
 
-    const maxIterations = 18;
-    const maxClampDist = baseStep * 1.35;
+    return { dirs, targetDists, startTs, endTs };
+  },
+
+  evaluateExplosionFrame(parts, percent, pattern = 'radial') {
+    const count = parts.length;
+    if (count <= 1) return [];
+
+    const globalT = Math.max(0, Math.min(1, (parseFloat(percent) || 0) / 100));
+    if (globalT <= 1e-4) {
+      return parts.map(p => p.origPos.slice());
+    }
+
+    const isAxial = pattern === 'axial';
+    const baseStep = parts[0].baseStep || 1;
+    const maxClampDist = baseStep * 1.40;
+
+    const dirs = new Array(count);
+    const curDists = new Array(count);
+
+    for (let i = 0; i < count; i++) {
+      const p = parts[i];
+      const sched = isAxial ? p.axialSchedule : p.cardinalSchedule;
+      dirs[i] = sched.dir;
+      const localProgress = this.smoothstep(sched.startT, sched.endT, globalT);
+      curDists[i] = sched.targetDist * localProgress;
+    }
+
+    const hitboxStrength = Math.min(1.0, globalT / 0.12);
+    const maxIterations = 12;
 
     for (let iter = 0; iter < maxIterations; iter++) {
       let anyOverlap = false;
@@ -144,17 +163,17 @@ window.SceneGraphMath = {
       for (let i = 0; i < count; i++) {
         for (let j = i + 1; j < count; j++) {
           const posI = [
-            extracted[i].origPos[0] + dirs[i][0] * distances[i],
-            extracted[i].origPos[1] + dirs[i][1] * distances[i],
-            extracted[i].origPos[2] + dirs[i][2] * distances[i]
+            parts[i].origPos[0] + dirs[i][0] * curDists[i],
+            parts[i].origPos[1] + dirs[i][1] * curDists[i],
+            parts[i].origPos[2] + dirs[i][2] * curDists[i]
           ];
           const posJ = [
-            extracted[j].origPos[0] + dirs[j][0] * distances[j],
-            extracted[j].origPos[1] + dirs[j][1] * distances[j],
-            extracted[j].origPos[2] + dirs[j][2] * distances[j]
+            parts[j].origPos[0] + dirs[j][0] * curDists[j],
+            parts[j].origPos[1] + dirs[j][1] * curDists[j],
+            parts[j].origPos[2] + dirs[j][2] * curDists[j]
           ];
 
-          const overlap = this.checkBoxHitboxOverlap(posI, boxHalves[i], posJ, boxHalves[j], 1.10);
+          const overlap = this.checkBoxHitboxOverlap(posI, parts[i].boxHalf, posJ, parts[j].boxHalf, 1.08);
           if (!overlap) continue;
 
           anyOverlap = true;
@@ -162,17 +181,17 @@ window.SceneGraphMath = {
           const axisJ = Math.abs(dirs[j][0]) > 0.5 ? 0 : (Math.abs(dirs[j][1]) > 0.5 ? 1 : 2);
 
           if (axisI === axisJ) {
-            const push = overlap[axisI] * 0.55 + baseStep * 0.04;
-            if (distances[i] >= distances[j]) {
-              distances[i] = Math.min(maxClampDist, distances[i] + push);
+            const push = (overlap[axisI] * 0.6 + baseStep * 0.02) * hitboxStrength;
+            if (curDists[i] >= curDists[j]) {
+              curDists[i] = Math.min(maxClampDist, curDists[i] + push);
             } else {
-              distances[j] = Math.min(maxClampDist, distances[j] + push);
+              curDists[j] = Math.min(maxClampDist, curDists[j] + push);
             }
           } else {
-            const pushI = Math.min(overlap[axisI] * 0.45, baseStep * 0.12);
-            const pushJ = Math.min(overlap[axisJ] * 0.45, baseStep * 0.12);
-            distances[i] = Math.min(maxClampDist, distances[i] + pushI);
-            distances[j] = Math.min(maxClampDist, distances[j] + pushJ);
+            const pushI = Math.min(overlap[axisI] * 0.45, baseStep * 0.10) * hitboxStrength;
+            const pushJ = Math.min(overlap[axisJ] * 0.45, baseStep * 0.10) * hitboxStrength;
+            curDists[i] = Math.min(maxClampDist, curDists[i] + pushI);
+            curDists[j] = Math.min(maxClampDist, curDists[j] + pushJ);
           }
         }
       }
@@ -180,29 +199,10 @@ window.SceneGraphMath = {
       if (!anyOverlap) break;
     }
 
-    for (let axis = 0; axis < 3; axis++) {
-      const posIndices = [];
-      const negIndices = [];
-      let posSum = 0, negSum = 0;
-
-      for (let i = 0; i < count; i++) {
-        if (dirs[i][axis] > 0.5) { posIndices.push(i); posSum += distances[i]; }
-        else if (dirs[i][axis] < -0.5) { negIndices.push(i); negSum += distances[i]; }
-      }
-
-      if (posIndices.length > 0 && negIndices.length > 0 && posSum > 1e-5 && negSum > 1e-5) {
-        const targetAvg = (posSum + negSum) * 0.5;
-        const scalePos = Math.max(0.75, Math.min(1.25, targetAvg / posSum));
-        const scaleNeg = Math.max(0.75, Math.min(1.25, targetAvg / negSum));
-        posIndices.forEach(i => { distances[i] = Math.min(maxClampDist, distances[i] * scalePos); });
-        negIndices.forEach(i => { distances[i] = Math.min(maxClampDist, distances[i] * scaleNeg); });
-      }
-    }
-
-    return extracted.map((p, idx) => [
-      dirs[idx][0] * distances[idx],
-      dirs[idx][1] * distances[idx],
-      dirs[idx][2] * distances[idx]
+    return parts.map((p, i) => [
+      p.origPos[0] + dirs[i][0] * curDists[i],
+      p.origPos[1] + dirs[i][1] * curDists[i],
+      p.origPos[2] + dirs[i][2] * curDists[i]
     ]);
   },
 
@@ -238,14 +238,14 @@ window.SceneGraphMath = {
 
     if (leafTransforms.length > 1) {
       rawNodes = leafTransforms;
-      strategy = `6-WAY ORTHO + HITBOX (${leafTransforms.length})`;
+      strategy = `LIVE-HITBOX 6-WAY (${leafTransforms.length})`;
     } else if (leafTransforms.length === 1) {
       const childrenWithGeo = (leafTransforms[0].children || [])
         .map(ch => typeof ch === 'object' ? (nodeMap[ch.instanceID] || ch) : nodeMap[ch])
         .filter(ch => ch && this.hasGeometryInSubtree(ch, nodeMap));
       if (childrenWithGeo.length > 1) {
         rawNodes = childrenWithGeo;
-        strategy = `6-WAY GROUP + HITBOX (${childrenWithGeo.length})`;
+        strategy = `LIVE-HITBOX GROUP (${childrenWithGeo.length})`;
       } else {
         rawNodes = leafTransforms;
       }
@@ -286,11 +286,7 @@ window.SceneGraphMath = {
     });
 
     let cx = 0, cy = 0, cz = 0;
-    extracted.forEach(p => {
-      cx += p.origPos[0];
-      cy += p.origPos[1];
-      cz += p.origPos[2];
-    });
+    extracted.forEach(p => { cx += p.origPos[0]; cy += p.origPos[1]; cz += p.origPos[2]; });
     cx /= count; cy /= count; cz /= count;
     const center = [cx, cy, cz];
 
@@ -307,29 +303,46 @@ window.SceneGraphMath = {
       : camStepInLocal;
 
     const assignedAxes = this.assignOrthogonalOutwardAxes(extracted, center, maxLocalSpread);
-    extracted.forEach((p, idx) => {
-      p.cardinalAxis = assignedAxes[idx];
-    });
+    extracted.forEach((p, idx) => { p.cardinalAxis = assignedAxes[idx]; });
 
-    const cardinalDisplacements = this.solveOrthogonalHitboxExplosion(extracted, center, baseStep, 'cardinal6');
-    const axialDisplacements = this.solveOrthogonalHitboxExplosion(extracted, center, baseStep, 'axial');
+    const cardinalSched = this.buildScheduleAndTargets(extracted, center, baseStep, 'cardinal6');
+    const axialSched = this.buildScheduleAndTargets(extracted, center, baseStep, 'axial');
 
     const parts = extracted.map((p, idx) => {
-      const cVec = cardinalDisplacements[idx];
-      const aVec = axialDisplacements[idx];
-      const cMag = Math.hypot(cVec[0], cVec[1], cVec[2]) || 1;
+      const s = p.localScale || [1, 1, 1];
+      const norm = Math.cbrt(s[0] * s[1] * s[2]) || 1;
+      const unitBox = baseStep * 0.20;
+      const boxHalf = [
+        unitBox * Math.max(0.55, Math.min(1.5, s[0] / norm)),
+        unitBox * Math.max(0.55, Math.min(1.5, s[1] / norm)),
+        unitBox * Math.max(0.55, Math.min(1.5, s[2] / norm))
+      ];
+
+      const cDir = cardinalSched.dirs[idx];
+      const cDist = cardinalSched.targetDists[idx];
+      const aDir = axialSched.dirs[idx];
+      const aDist = axialSched.targetDists[idx];
 
       return {
         instanceID: p.instanceID,
         name: `${p.name} [${p.cardinalAxis.id}]`,
         nodeType: p.nodeType,
         origPos: p.origPos,
-        cardinalLabel: p.cardinalAxis.label,
-        localRadialVec: cVec,
-        localAxialVec: aVec,
-        radialDir: [cVec[0] / cMag, cVec[1] / cMag, cVec[2] / cMag],
-        axialDir: aVec,
-        maxDistance: cMag,
+        baseStep,
+        boxHalf,
+        cardinalSchedule: {
+          dir: cDir,
+          targetDist: cDist,
+          startT: cardinalSched.startTs[idx],
+          endT: cardinalSched.endTs[idx]
+        },
+        axialSchedule: {
+          dir: aDir,
+          targetDist: aDist,
+          startT: axialSched.startTs[idx],
+          endT: axialSched.endTs[idx]
+        },
+        localRadialVec: [cDir[0] * cDist, cDir[1] * cDist, cDir[2] * cDist],
         visible: true,
         pulsed: false
       };
