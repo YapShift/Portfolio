@@ -1,9 +1,10 @@
 /**
- * YapShift 专属 3D 引擎与交互主模块 (app-engine.js v12.0)
+ * YapShift 专属 3D 引擎与交互主模块 (app-engine.js v17.0 Full-Range Silky Edition)
  * 核心升级：
- *  1. 多实例并行预加载与常驻显存池 (Multi-Iframe Parallel Pool)：启动时所有模型同时在后台并行初始化，切换模型 0 毫秒秒切
- *  2. 严格六向正交朝外爆炸 (上下左右前后) + 简易方框型 Hitbox (AABB) 防重叠解算，爆炸紧凑不飞散
- *  3. 修复 Sketchfab setCameraLookAt(duration=0) 被当作 falsy 忽略的 Bug，实现丝滑同步的镜头随爆炸自动缩放 + 视觉中心 100% 锁定
+ *  1. 彻底解决“0%->1% 突然跳变、只有 1%->0% 顺滑”的问题：废除高频打断式 rAF/anime 循环，
+ *     改为 120ms 温和节流 + Sketchfab GPU 原生 350ms~650ms 丝滑缓动，全百分比 (0%~100%) 双向均如丝般顺滑！
+ *  2. 多实例并行预加载与常驻显存池 (Multi-Iframe Parallel Pool)：启动时所有模型同时在后台并行初始化，切换模型 0 毫秒秒切
+ *  3. 同步视线轴向平滑缩放镜头 + 视觉中心 100% 锁定
  */
 
 const YAPSHIFT_EXCLUSIVE_ASSETS = [
@@ -164,34 +165,12 @@ window.SketchfabEngine = class SketchfabEngine {
     this.startOrbitLoop();
   }
 
-  get activeCtx() {
-    return this.instances.get(this.activeAssetId) || null;
-  }
-
-  get ready() {
-    const ctx = this.activeCtx;
-    return Boolean(ctx && ctx.ready);
-  }
-
-  get api() {
-    const ctx = this.activeCtx;
-    return ctx ? ctx.api : null;
-  }
-
-  get parts() {
-    const ctx = this.activeCtx;
-    return ctx ? ctx.parts : [];
-  }
-
-  get postFx() {
-    const ctx = this.activeCtx;
-    return ctx ? ctx.postFx : { ssao: false, bloom: false, sharpen: false, cinema: false };
-  }
-
-  set postFx(val) {
-    const ctx = this.activeCtx;
-    if (ctx) ctx.postFx = val;
-  }
+  get activeCtx() { return this.instances.get(this.activeAssetId) || null; }
+  get ready() { const ctx = this.activeCtx; return Boolean(ctx && ctx.ready); }
+  get api() { const ctx = this.activeCtx; return ctx ? ctx.api : null; }
+  get parts() { const ctx = this.activeCtx; return ctx ? ctx.parts : []; }
+  get postFx() { const ctx = this.activeCtx; return ctx ? ctx.postFx : { ssao: false, bloom: false, sharpen: false, cinema: false }; }
+  set postFx(val) { const ctx = this.activeCtx; if (ctx) ctx.postFx = val; }
 
   async fetchRestMeta(uid) {
     try {
@@ -213,7 +192,7 @@ window.SketchfabEngine = class SketchfabEngine {
     ctx.api.getCameraLookAt((err, cam) => {
       if (err || !cam) return;
       const factor = (parseFloat(ctx.explodeVal) || 0) / 100;
-      const currentZoomMult = 1 + factor * 0.45;
+      const currentZoomMult = 1 + factor * 0.35;
       ctx.baselineCam = {
         target: [cam.target[0], cam.target[1], cam.target[2]],
         baseVec: [
@@ -226,9 +205,7 @@ window.SketchfabEngine = class SketchfabEngine {
   }
 
   ensureInstance(asset) {
-    if (this.instances.has(asset.id)) {
-      return this.instances.get(asset.id);
-    }
+    if (this.instances.has(asset.id)) return this.instances.get(asset.id);
 
     const iframe = document.createElement('iframe');
     iframe.id = `sf-frame-${asset.id}`;
@@ -240,49 +217,23 @@ window.SketchfabEngine = class SketchfabEngine {
     iframe.setAttribute('web-share', '');
     iframe.setAttribute('allowfullscreen', '');
 
-    if (this.poolContainer) {
-      this.poolContainer.appendChild(iframe);
-    }
+    if (this.poolContainer) this.poolContainer.appendChild(iframe);
 
     const ctx = {
-      asset,
-      iframe,
-      api: null,
-      ready: false,
-      loading: true,
-      parts: [],
-      materials: [],
-      strategy: 'SCANNING...',
-      polys: 0,
-      verts: 0,
-      officialName: null,
-      camScale: 0.85,
-      baselineCam: null,
-      explodeVal: 0,
-      shaderMode: 'rendered',
-      lightDeg: 0,
+      asset, iframe, api: null, ready: false, loading: true,
+      parts: [], materials: [], strategy: 'SCANNING...', polys: 0, verts: 0, officialName: null,
+      camScale: 0.85, baselineCam: null, explodeVal: 0, shaderMode: 'rendered', lightDeg: 0,
       postFx: { ssao: false, bloom: false, sharpen: false, cinema: false },
-      userInteracting: false,
-      programmaticCamMoving: false
+      userInteracting: false, programmaticCamMoving: false
     };
 
     this.instances.set(asset.id, ctx);
     const metaPromise = this.fetchRestMeta(asset.uid);
-
-    if (typeof Sketchfab === 'undefined') {
-      console.error('Sketchfab Viewer API script not loaded!');
-      return ctx;
-    }
+    if (typeof Sketchfab === 'undefined') return ctx;
 
     const client = new Sketchfab('1.12.1', iframe);
     client.init(asset.uid, {
-      autostart: 1,
-      preload: 1,
-      ui_theme: 'dark',
-      ui_infos: 0,
-      ui_controls: 1,
-      ui_watermark: 0,
-      transparent: 1,
+      autostart: 1, preload: 1, ui_theme: 'dark', ui_infos: 0, ui_controls: 1, ui_watermark: 0, transparent: 1,
       success: (api) => {
         ctx.api = api;
         api.start();
@@ -291,13 +242,9 @@ window.SketchfabEngine = class SketchfabEngine {
           ctx.loading = false;
           asset.isCachedReady = true;
 
-          api.addEventListener('camerastart', () => {
-            if (!ctx.programmaticCamMoving) ctx.userInteracting = true;
-          });
+          api.addEventListener('camerastart', () => { if (!ctx.programmaticCamMoving) ctx.userInteracting = true; });
           api.addEventListener('cameraend', () => {
-            if (!ctx.programmaticCamMoving) {
-              this.syncCameraBaseline(ctx);
-            }
+            if (!ctx.programmaticCamMoving) this.syncCameraBaseline(ctx);
             setTimeout(() => { ctx.userInteracting = false; }, 1200);
           });
 
@@ -308,10 +255,7 @@ window.SketchfabEngine = class SketchfabEngine {
               const vz = cam.position[2] - cam.target[2];
               const dist = Math.hypot(vx, vy, vz);
               ctx.camScale = dist > 0.01 ? dist * 0.14 : 0.85;
-              ctx.baselineCam = {
-                target: [cam.target[0], cam.target[1], cam.target[2]],
-                baseVec: [vx, vy, vz]
-              };
+              ctx.baselineCam = { target: [cam.target[0], cam.target[1], cam.target[2]], baseVec: [vx, vy, vz] };
             }
 
             api.getMaterialList((e1, mats) => {
@@ -328,16 +272,10 @@ window.SketchfabEngine = class SketchfabEngine {
                 asset.loadedPolys = ctx.polys;
 
                 Bus.emit('engine:preload-updated', { asset, ctx });
-
                 if (this.activeAssetId === asset.id) {
                   Bus.emit('engine:ready', {
-                    asset,
-                    parts: ctx.parts,
-                    strategy: ctx.strategy,
-                    polys: ctx.polys,
-                    verts: ctx.verts,
-                    officialName: ctx.officialName,
-                    ctx
+                    asset, parts: ctx.parts, strategy: ctx.strategy,
+                    polys: ctx.polys, verts: ctx.verts, officialName: ctx.officialName, ctx
                   });
                 }
               });
@@ -364,25 +302,16 @@ window.SketchfabEngine = class SketchfabEngine {
 
     this.instances.forEach((ctx, id) => {
       if (id === asset.id) {
-        ctx.iframe.style.opacity = '1';
-        ctx.iframe.style.pointerEvents = 'auto';
-        ctx.iframe.style.zIndex = '20';
+        ctx.iframe.style.opacity = '1'; ctx.iframe.style.pointerEvents = 'auto'; ctx.iframe.style.zIndex = '20';
       } else {
-        ctx.iframe.style.opacity = '0';
-        ctx.iframe.style.pointerEvents = 'none';
-        ctx.iframe.style.zIndex = '1';
+        ctx.iframe.style.opacity = '0'; ctx.iframe.style.pointerEvents = 'none'; ctx.iframe.style.zIndex = '1';
       }
     });
 
     if (targetCtx.ready) {
       Bus.emit('engine:ready', {
-        asset,
-        parts: targetCtx.parts,
-        strategy: targetCtx.strategy,
-        polys: targetCtx.polys,
-        verts: targetCtx.verts,
-        officialName: targetCtx.officialName,
-        ctx: targetCtx
+        asset, parts: targetCtx.parts, strategy: targetCtx.strategy,
+        polys: targetCtx.polys, verts: targetCtx.verts, officialName: targetCtx.officialName, ctx: targetCtx
       });
       Bus.emit('engine:log', `> ⚡ Instant Cache Hit: [${asset.title}] 0ms 零延迟秒切完成！`);
     } else {
@@ -403,14 +332,8 @@ window.SketchfabEngine = class SketchfabEngine {
     }, 90);
   }
 
-  stopOrbitLoop() {
-    if (this.orbitTimer) { clearInterval(this.orbitTimer); this.orbitTimer = null; }
-  }
-
-  toggleAutoOrbit() {
-    this.autoOrbitEnabled = !this.autoOrbitEnabled;
-    return this.autoOrbitEnabled;
-  }
+  stopOrbitLoop() { if (this.orbitTimer) { clearInterval(this.orbitTimer); this.orbitTimer = null; } }
+  toggleAutoOrbit() { this.autoOrbitEnabled = !this.autoOrbitEnabled; return this.autoOrbitEnabled; }
 
   captureBaseline(currentSliderVal) {
     const ctx = this.activeCtx;
@@ -419,7 +342,7 @@ window.SketchfabEngine = class SketchfabEngine {
     return new Promise((resolve) => {
       ctx.api.getCameraLookAt((err, cam) => {
         if (!err && cam) {
-          const s = 1 + factor * 0.45;
+          const s = 1 + factor * 0.35;
           ctx.baselineCam = {
             target: [cam.target[0], cam.target[1], cam.target[2]],
             baseVec: [
@@ -446,43 +369,43 @@ window.SketchfabEngine = class SketchfabEngine {
     }, 1600);
   }
 
-  explode(percent, adjustCam = true, camDuration = 0.04) {
+  /**
+   * 全百分比丝滑爆炸：由 Sketchfab GPU 原生执行 duration (默认 0.38s) 缓动插值，
+   * 彻底告别高频打断导致的“0%->1%突然跳变”，0%~100% 任意百分比双向均如丝般顺滑！
+   */
+  explode(percent, adjustCam = true, durationSec = 0.38) {
     const ctx = this.activeCtx;
     if (!ctx || !ctx.ready || !ctx.api) return;
     if (ctx.parts.length <= 1) {
-      Bus.emit('engine:log', `> [INFO] 当前模型为单网格合并资产 (1 Mesh)，不支持子件拆解，请使用线框或灰模检视。`);
+      Bus.emit('engine:log', `> [INFO] 当前模型为单网格合并资产 (1 Mesh)，不支持子件拆解。`);
       return;
     }
 
     ctx.explodeVal = parseFloat(percent) || 0;
     const factor = ctx.explodeVal / 100;
-
-    // 实时逐帧解算：由外向内分段时序 + 当前帧简易方框 Hitbox (AABB) 防重叠碰撞检测
     const framePositions = SceneGraphMath.evaluateExplosionFrame(ctx.parts, ctx.explodeVal, this.pattern);
+
     ctx.parts.forEach((p, idx) => {
       const pos = framePositions[idx];
       if (!pos) return;
-      ctx.api.translate(p.instanceID, pos, { duration: 0.45, easing: 'easeOutCubic' });
+      ctx.api.translate(p.instanceID, pos, { duration: durationSec, easing: 'easeOutQuad' });
     });
 
-
     if (adjustCam && ctx.baselineCam) {
-      const z = 1 + factor * 0.45;
+      const z = 1 + factor * 0.35;
       const t = ctx.baselineCam.target;
       const v = ctx.baselineCam.baseVec;
       ctx.programmaticCamMoving = true;
       ctx.api.setCameraLookAt(
         [t[0] + v[0] * z, t[1] + v[1] * z, t[2] + v[2] * z],
         t,
-        camDuration,
-        () => {
-          setTimeout(() => { ctx.programmaticCamMoving = false; }, 60);
-        }
+        durationSec,
+        () => { setTimeout(() => { ctx.programmaticCamMoving = false; }, 60); }
       );
       this.showCamZoomToast();
     }
 
-    Bus.emit('engine:log', `> YapShift 6-Way Ortho + Hitbox Explode [${this.pattern.toUpperCase()}]: ${Math.round(ctx.explodeVal)}% (CamZoom: ${(1 + factor * 0.45).toFixed(2)}x)`);
+    Bus.emit('engine:log', `> YapShift Silky Explode [${this.pattern.toUpperCase()}]: ${Math.round(ctx.explodeVal)}%`);
   }
 
   setShading(mode) {
@@ -490,15 +413,10 @@ window.SketchfabEngine = class SketchfabEngine {
     if (!ctx || !ctx.ready || !ctx.api) return;
     ctx.shaderMode = mode;
 
-    if (mode === 'wire') {
-      ctx.api.setShadingStyle('lit');
-      ctx.api.setWireframe(true, { color: 'F5792AFF' });
-      Bus.emit('engine:log', `> Wireframe Topology Overlay Enabled`);
-      return;
-    }
+    if (mode === 'wire') { ctx.api.setShadingStyle('lit'); ctx.api.setWireframe(true, { color: 'F5792AFF' }); return; }
     ctx.api.setWireframe(false);
-    if (mode === 'clay')   { ctx.api.setShadingStyle('matcap');    Bus.emit('engine:log', `> Matcap Clay Shading Enabled`); return; }
-    if (mode === 'albedo') { ctx.api.setShadingStyle('shadeless'); Bus.emit('engine:log', `> Albedo BaseColor Inspector`); return; }
+    if (mode === 'clay')   { ctx.api.setShadingStyle('matcap'); return; }
+    if (mode === 'albedo') { ctx.api.setShadingStyle('shadeless'); return; }
     ctx.api.setShadingStyle('lit');
 
     if (!ctx.materials.length) return;
@@ -514,7 +432,6 @@ window.SketchfabEngine = class SketchfabEngine {
         }
         ctx.api.setMaterial(mat);
       });
-      Bus.emit('engine:log', `> Shader Mode Switched: [${mode.toUpperCase()}]`);
     });
   }
 
@@ -523,7 +440,6 @@ window.SketchfabEngine = class SketchfabEngine {
     if (!ctx) return { ssao: false, bloom: false, sharpen: false, cinema: false };
     ctx.postFx[key] = !ctx.postFx[key];
     if (!ctx.ready || !ctx.api) return ctx.postFx;
-
     const any = Object.values(ctx.postFx).some(Boolean);
     ctx.api.setPostProcessing({
       enable: any, ssaoEnable: ctx.postFx.ssao, ssaoRadius: 0.15, ssaoIntensity: 0.75,
@@ -533,7 +449,6 @@ window.SketchfabEngine = class SketchfabEngine {
       vignetteEnable: ctx.postFx.cinema, vignetteAmount: 0.45,
       toneMappingEnable: ctx.postFx.cinema, toneMappingMethod: 'filmic'
     });
-    Bus.emit('engine:log', `> Post-FX Updated: ${JSON.stringify(ctx.postFx)}`);
     return ctx.postFx;
   }
 
@@ -542,7 +457,6 @@ window.SketchfabEngine = class SketchfabEngine {
     if (!ctx || !ctx.ready || !ctx.api) return;
     ctx.lightDeg = parseFloat(deg) || 0;
     ctx.api.setEnvironment({ enable: true, rotation: (ctx.lightDeg * Math.PI) / 180 });
-    Bus.emit('engine:log', `> HDRI Light Rotation: ${deg}°`);
   }
 
   pulsePart(idx) {
@@ -553,12 +467,8 @@ window.SketchfabEngine = class SketchfabEngine {
     const factor = p.pulsed ? 0.85 : (ctx.explodeVal / 100);
     ctx.api.translate(
       p.instanceID,
-      [
-        p.origPos[0] + p.localRadialVec[0] * factor,
-        p.origPos[1] + p.localRadialVec[1] * factor,
-        p.origPos[2] + p.localRadialVec[2] * factor
-      ],
-      { duration: 0.22 }
+      [p.origPos[0] + p.localRadialVec[0] * factor, p.origPos[1] + p.localRadialVec[1] * factor, p.origPos[2] + p.localRadialVec[2] * factor],
+      { duration: 0.35, easing: 'easeOutQuad' }
     );
     return p.pulsed;
   }
@@ -618,9 +528,7 @@ window.StudioUI = {
     overlay.classList.add('pointer-events-none');
     if (typeof anime !== 'undefined') {
       anime({ targets: overlay, opacity: [1, 0], duration: 420, easing: 'easeOutQuad', complete: () => overlay.classList.add('hidden') });
-    } else {
-      overlay.classList.add('hidden');
-    }
+    } else { overlay.classList.add('hidden'); }
     MotionFX.animateWorkbenchEntrance();
   },
 
@@ -642,9 +550,7 @@ window.StudioUI = {
         if (card.classList.contains('tilt-card')) {
           if (x >= 0 && x <= rect.width && y >= 0 && y <= rect.height) {
             card.style.transform = `perspective(600px) rotateX(${(0.5 - (y / rect.height)) * 8}deg) rotateY(${((x / rect.width) - 0.5) * 8}deg)`;
-          } else {
-            card.style.transform = 'none';
-          }
+          } else { card.style.transform = 'none'; }
         }
       });
     });
@@ -737,44 +643,21 @@ window.StudioUI = {
     });
   },
 
+  // 一键按钮 (0% / 65%) 直接单次调用 Sketchfab 原生 650ms GPU 缓动，绝不逐帧打断！
   async animateExplodeTo(targetVal) {
     const slider = document.getElementById('explode-slider');
     await this.engine.captureBaseline(slider.value);
-    const obj = { val: parseFloat(slider.value) || 0 };
-    if (typeof anime !== 'undefined') {
-      anime({
-        targets: obj,
-        val: targetVal,
-        duration: 480,
-        easing: 'easeOutCubic',
-        update: () => {
-          slider.value = obj.val;
-          document.getElementById('explode-percent').textContent = Math.round(obj.val) + '%';
-          this.engine.explode(obj.val, true, 0.05);
-        }
-      });
-    } else {
-      slider.value = targetVal;
-      document.getElementById('explode-percent').textContent = Math.round(targetVal) + '%';
-      this.engine.explode(targetVal, true, 0.35);
-    }
+    slider.value = targetVal;
+    document.getElementById('explode-percent').textContent = Math.round(targetVal) + '%';
+    this.engine.explode(targetVal, true, 0.65);
   },
 
   bindBusListeners() {
-    Bus.on('engine:preload-updated', () => {
-      this.renderAssetCards();
-    });
-
+    Bus.on('engine:preload-updated', () => this.renderAssetCards());
     Bus.on('engine:loading', () => {
       document.getElementById('loading-overlay').classList.remove('opacity-0', 'pointer-events-none');
       document.getElementById('telemetry-status-tag').textContent = 'PARALLEL PRELOADING...';
-      ['spec-polys', 'spec-verts', 'spec-mats'].forEach(id => {
-        const el = document.getElementById(id);
-        el.textContent = 'SCANNING...';
-        el.className = 'text-xs font-bold text-slate-400 font-mono mt-0.5 telemetry-scanning';
-      });
     });
-
     Bus.on('engine:ready', ({ asset, parts, strategy, polys, verts, officialName }) => {
       document.getElementById('loading-overlay').classList.add('opacity-0', 'pointer-events-none');
       asset.loadedPolys = polys;
@@ -794,12 +677,11 @@ window.StudioUI = {
 
       const listEl = document.getElementById('subpart-inspector-list');
       if (parts.length <= 1) {
-        listEl.innerHTML = `<div class="p-2 rounded bg-amber-500/10 border border-amber-500/30 text-amber-200">⚠️ 单网格合并模型：内部仅有 1 个合并几何体，可使用 ⌗ 拓扑线框、◐ 雕塑灰模与光影旋转检视。</div>`;
+        listEl.innerHTML = `<div class="p-2 rounded bg-amber-500/10 border border-amber-500/30 text-amber-200">⚠️ 单网格合并模型：内部仅有 1 个合并几何体。</div>`;
       } else {
         listEl.innerHTML = parts.map((p, idx) => `<div class="flex items-center justify-between px-2 py-1 rounded bg-[#131b2e]/90 border border-white/5"><span class="text-white truncate max-w-[175px]"><b class="text-orange-400 mr-1">#${idx + 1}</b>${p.name}</span><div class="flex gap-1"><button data-action="pulse-part" data-idx="${idx}" class="px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-300 text-[9px]">${p.pulsed ? '收回' : '弹出'}</button><button data-action="vis-part" data-idx="${idx}" class="px-1.5 py-0.5 rounded bg-white/10 text-slate-200 text-[9px]">${p.visible ? '显隐' : '已隐'}</button></div></div>`).join('');
       }
     });
-
     Bus.on('engine:log', (msg) => { document.getElementById('panel-api-log').textContent = msg; });
   },
 
@@ -825,7 +707,7 @@ window.StudioUI = {
         const isRadial = this.engine.pattern === 'radial';
         document.getElementById('btn-pat-radial').className = isRadial ? 'px-2 py-0.5 rounded bg-orange-500/30 text-orange-200 font-bold' : 'px-2 py-0.5 rounded text-slate-400';
         document.getElementById('btn-pat-axial').className = !isRadial ? 'px-2 py-0.5 rounded bg-orange-500/30 text-orange-200 font-bold' : 'px-2 py-0.5 rounded text-slate-400';
-        this.engine.explode(document.getElementById('explode-slider').value, false);
+        this.engine.explode(document.getElementById('explode-slider').value, false, 0.45);
       }
       if (act === 'explode-to') this.animateExplodeTo(parseFloat(btn.dataset.val));
       if (act === 'pulse-part') { const pulsed = this.engine.pulsePart(parseInt(btn.dataset.idx, 10)); if (pulsed !== null) btn.textContent = pulsed ? '收回' : '弹出'; }
@@ -844,8 +726,7 @@ window.StudioUI = {
         const isProf = btn.dataset.tab === 'profile';
         document.getElementById('tab-panel-profile').classList.toggle('hidden', !isProf);
         document.getElementById('tab-panel-model').classList.toggle('hidden', isProf);
-        const btnModel = document.getElementById('tab-btn-model');
-        const btnProf = document.getElementById('tab-btn-profile');
+        const btnModel = document.getElementById('tab-btn-model'), btnProf = document.getElementById('tab-btn-profile');
         if (btnModel && btnProf) {
           btnModel.className = !isProf ? 'py-2 rounded-lg border bg-orange-500/20 border-orange-500/50 text-orange-200' : 'py-2 rounded-lg border border-transparent text-slate-400 hover:text-white';
           btnProf.className = isProf ? 'py-2 rounded-lg border bg-orange-500/20 border-orange-500/50 text-orange-200' : 'py-2 rounded-lg border border-transparent text-slate-400 hover:text-white';
@@ -872,31 +753,23 @@ window.StudioUI = {
       }
     });
 
+    // 核心丝滑控制：120ms 节流 + 松手精准落位，绝不高频打断 GPU 原生过渡动画！
     const expSlider = document.getElementById('explode-slider');
+    let throttleTimer = null;
+
     expSlider.addEventListener('pointerdown', () => this.engine.captureBaseline(expSlider.value));
-    expSlider.addEventListener('mousedown', () => this.engine.captureBaseline(expSlider.value));
-    let targetExpVal = 0;
-    let currentExpVal = 0;
-    let expRafId = null;
-
-    const runSmoothExplodeLoop = () => {
-      const diff = targetExpVal - currentExpVal;
-      if (Math.abs(diff) < 0.08) {
-        currentExpVal = targetExpVal;
-        this.engine.explode(currentExpVal, true, 0.08);
-        expRafId = null;
-        return;
-      }
-      // 阻尼系数 0.10：数值越小过渡越慢越优雅（推荐 0.08 ~ 0.14）
-      currentExpVal += diff * 0.10;
-      this.engine.explode(currentExpVal, true, 0.08);
-      expRafId = requestAnimationFrame(runSmoothExplodeLoop);
-    };
-
     expSlider.addEventListener('input', (e) => {
-      targetExpVal = parseFloat(e.target.value) || 0;
-      document.getElementById('explode-percent').textContent = Math.round(targetExpVal) + '%';
-      if (!expRafId) expRafId = requestAnimationFrame(runSmoothExplodeLoop);
+      const val = parseFloat(e.target.value) || 0;
+      document.getElementById('explode-percent').textContent = Math.round(val) + '%';
+      if (throttleTimer) return;
+      throttleTimer = setTimeout(() => {
+        throttleTimer = null;
+        this.engine.explode(expSlider.value, true, 0.35);
+      }, 120);
+    });
+    expSlider.addEventListener('change', (e) => {
+      if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
+      this.engine.explode(e.target.value, true, 0.42);
     });
 
     document.getElementById('light-rot-slider').addEventListener('input', (e) => {
