@@ -1,6 +1,9 @@
 /**
- * YapShift 3D Workbench Engine (app-engine.js v19.0)
- * 兼顾影院级 Showreel 铺垫氛围 + 后台多实例并行预载秒切 + 全百分比 GPU 丝滑双模式拆解。
+ * YapShift 3D Workbench Engine (app-engine.js v20.0)
+ * 核心升级：
+ *  1. 新增 AnimeGridStage：仿 animejs.com 的精密坐标点阵 + 十字准星 + 鼠标磁吸涟漪 + 随爆炸进度呼吸的刻度环（且在爆炸动画瞬间自动让出 GPU 算力）
+ *  2. 彻底修复“转台失效”：改为真正的 360° 水平轨道相机转台（与爆炸缩放完美兼容），顶部太阳滑块独立控制 HDRI 打光
+ *  3. 彻底修复“镜头自适应缩放失效”：引入 programmaticCamUntil 时间戳保护锁，杜绝 cameraend 误覆盖基准视角
  */
 
 const STUDIO_ASSETS = [
@@ -35,17 +38,180 @@ const STUDIO_ASSETS = [
 ];
 
 const STUDIO_SHADERS = [
-  { id: 'rendered', label: '✦ 完整PBR' },
-  { id: 'clay',     label: '◐ 雕塑灰模' },
-  { id: 'wire',     label: '⌗ 拓扑线框' },
-  { id: 'xray',     label: '❖ X-Ray' },
-  { id: 'albedo',   label: '▣ 纯色贴图' }
+  { id: 'rendered', label: '✦ 完整PBR',  rgb: '245, 121, 42' },
+  { id: 'clay',     label: '◐ 雕塑灰模', rgb: '161, 161, 170' },
+  { id: 'wire',     label: '⌗ 拓扑线框', rgb: '245, 121, 42' },
+  { id: 'xray',     label: '❖ X-Ray',   rgb: '56, 189, 248' },
+  { id: 'albedo',   label: '▣ 纯色贴图', rgb: '52, 211, 153' }
 ];
 
 window.Bus = {
   listeners: {},
   on(event, fn) { (this.listeners[event] = this.listeners[event] || []).push(fn); },
   emit(event, payload) { (this.listeners[event] || []).forEach(fn => fn(payload)); }
+};
+
+/**
+ * ✨ Anime.js 风格精密动态网格与呼吸刻度环舞台 (轻量高性能 2D Canvas)
+ */
+const AnimeGridStage = {
+  canvas: null, ctx: null, w: 0, h: 0, dpr: 1,
+  mouse: { x: -9999, y: -9999, tx: -9999, ty: -9999 },
+  accentRGB: '245, 121, 42',
+  explodeT: 0, targetExplodeT: 0,
+  angle: 0, pausedUntil: 0, lastFrame: 0,
+
+  init() {
+    this.canvas = document.getElementById('anime-bg-canvas');
+    if (!this.canvas) return;
+    this.ctx = this.canvas.getContext('2d', { alpha: true });
+    this.resize();
+    window.addEventListener('resize', () => this.resize());
+    window.addEventListener('mousemove', (e) => {
+      this.mouse.tx = e.clientX;
+      this.mouse.ty = e.clientY;
+    }, { passive: true });
+    requestAnimationFrame((t) => this.loop(t));
+  },
+
+  resize() {
+    if (!this.canvas) return;
+    this.dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    this.w = window.innerWidth;
+    this.h = window.innerHeight;
+    this.canvas.width = Math.floor(this.w * this.dpr);
+    this.canvas.height = Math.floor(this.h * this.dpr);
+    this.ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+  },
+
+  setAccent(rgb) { this.accentRGB = rgb || '245, 121, 42'; },
+  setExplodeProgress(t) { this.targetExplodeT = Math.max(0, Math.min(1, t)); },
+  yieldToWebGL(ms = 420) { this.pausedUntil = Date.now() + ms; },
+
+  loop(now) {
+    requestAnimationFrame((t) => this.loop(t));
+    // 限帧 ~30FPS + 3D 模型爆发动画期间让出算力，保证 WebGL 满帧不卡
+    if (now - this.lastFrame < 32) return;
+    if (Date.now() < this.pausedUntil) return;
+    this.lastFrame = now;
+
+    this.mouse.x += (this.mouse.tx - this.mouse.x) * 0.14;
+    this.mouse.y += (this.mouse.ty - this.mouse.y) * 0.14;
+    this.explodeT += (this.targetExplodeT - this.explodeT) * 0.12;
+    this.angle += 0.0025;
+
+    this.draw();
+  },
+
+  draw() {
+    const ctx = this.ctx, w = this.w, h = this.h;
+    if (!ctx) return;
+    ctx.clearRect(0, 0, w, h);
+
+    const cx = w * 0.5, cy = h * 0.5;
+    const rgb = this.accentRGB;
+
+    // 1. 极柔和的中央摄影棚底光
+    const coreGrad = ctx.createRadialGradient(cx, cy, 40, cx, cy, Math.max(w, h) * 0.55);
+    coreGrad.addColorStop(0, `rgba(${rgb}, ${0.065 + this.explodeT * 0.04})`);
+    coreGrad.addColorStop(0.55, 'rgba(56, 189, 248, 0.02)');
+    coreGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+    ctx.fillStyle = coreGrad;
+    ctx.fillRect(0, 0, w, h);
+
+    // 2. 精密工程点阵与每 4 格十字准星（仿 animejs.com 交互磁吸点亮）
+    const spacing = 36;
+    const cols = Math.ceil(w / spacing);
+    const rows = Math.ceil(h / spacing);
+    const mx = this.mouse.x, my = this.mouse.y;
+    const interactR = 175;
+
+    for (let r = 0; r <= rows; r++) {
+      const baseY = r * spacing;
+      for (let c = 0; c <= cols; c++) {
+        const baseX = c * spacing;
+        const dx = baseX - mx;
+        const dy = baseY - my;
+        const dist = Math.hypot(dx, dy);
+        const isMajor = (r % 4 === 0 && c % 4 === 0);
+
+        let px = baseX, py = baseY;
+        let alpha = isMajor ? 0.16 : 0.075;
+        let activeMix = 0;
+
+        if (dist < interactR) {
+          activeMix = 1 - dist / interactR;
+          const push = activeMix * activeMix * 6;
+          if (dist > 1) {
+            px += (dx / dist) * push;
+            py += (dy / dist) * push;
+          }
+          alpha += activeMix * 0.45;
+        }
+
+        if (isMajor) {
+          const s = 3 + activeMix * 2.2;
+          ctx.strokeStyle = activeMix > 0.15
+            ? `rgba(${rgb}, ${alpha})`
+            : `rgba(255, 255, 255, ${alpha})`;
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(px - s, py); ctx.lineTo(px + s, py);
+          ctx.moveTo(px, py - s); ctx.lineTo(px, py + s);
+          ctx.stroke();
+        } else {
+          ctx.fillStyle = activeMix > 0.2
+            ? `rgba(${rgb}, ${alpha})`
+            : `rgba(220, 230, 245, ${alpha})`;
+          const rad = 0.9 + activeMix * 1.1;
+          ctx.beginPath();
+          ctx.arc(px, py, rad, 0, Math.PI * 2);
+          ctx.fill();
+        }
+      }
+    }
+
+    // 3. 随爆炸进度呼吸扩张的精密背景刻度弧（克制低透明，增强画面层次感）
+    const baseRadius = Math.min(w, h) * (0.29 + this.explodeT * 0.085);
+
+    ctx.save();
+    ctx.translate(cx, cy);
+
+    // 外圈虚线主刻度环
+    ctx.save();
+    ctx.rotate(this.angle);
+    ctx.strokeStyle = `rgba(${rgb}, ${0.16 + this.explodeT * 0.12})`;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 14, 24, 14]);
+    ctx.beginPath();
+    ctx.arc(0, 0, baseRadius, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+
+    // 内圈反向细刻度环
+    ctx.save();
+    ctx.rotate(-this.angle * 1.4);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.07)';
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 10]);
+    ctx.beginPath();
+    ctx.arc(0, 0, baseRadius * 0.78, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
+
+    // 水平与垂直极细工程辅助基准线
+    ctx.setLineDash([]);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.035)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(-baseRadius * 1.35, 0); ctx.lineTo(-baseRadius * 0.92, 0);
+    ctx.moveTo(baseRadius * 0.92, 0);  ctx.lineTo(baseRadius * 1.35, 0);
+    ctx.moveTo(0, -baseRadius * 1.25); ctx.lineTo(0, -baseRadius * 0.92);
+    ctx.moveTo(0, baseRadius * 0.92);  ctx.lineTo(0, baseRadius * 1.25);
+    ctx.stroke();
+
+    ctx.restore();
+  }
 };
 
 class SketchfabPoolEngine {
@@ -55,9 +221,9 @@ class SketchfabPoolEngine {
     this.activeAssetId = null;
     this.mode = 'cardinal';
     this.autoOrbitEnabled = true;
-    this.orbitTimer = null;
     this.toastTimer = null;
-    this.startOrbitLoop();
+    this.lastOrbitFrame = 0;
+    this.startTurntableLoop();
   }
 
   get activeCtx() { return this.instances.get(this.activeAssetId) || null; }
@@ -83,12 +249,18 @@ class SketchfabPoolEngine {
     return n;
   }
 
+  getZoomMultiplier(explodeVal) {
+    const factor = (parseFloat(explodeVal) || 0) / 100;
+    return 1 + factor * (this.mode === 'linear' ? 0.80 : 0.45);
+  }
+
+  // 安全记录用户最新的观察视角（只有在非程序控制相机时才更新！）
   syncCameraBaseline(ctx) {
-    if (!ctx || !ctx.ready || !ctx.api || ctx.programmaticCamMoving) return;
+    if (!ctx || !ctx.ready || !ctx.api) return;
+    if (Date.now() < ctx.programmaticCamUntil) return;
     ctx.api.getCameraLookAt((err, cam) => {
       if (err || !cam) return;
-      const factor = (parseFloat(ctx.explodeVal) || 0) / 100;
-      const zoomMult = 1 + factor * (this.mode === 'linear' ? 0.55 : 0.35);
+      const zoomMult = this.getZoomMultiplier(ctx.explodeVal);
       ctx.baselineCam = {
         target: [cam.target[0], cam.target[1], cam.target[2]],
         baseVec: [
@@ -105,7 +277,7 @@ class SketchfabPoolEngine {
 
     const iframe = document.createElement('iframe');
     iframe.id = `sf-frame-${asset.id}`;
-    iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;opacity:0;pointer-events:none;z-index:1;transition:opacity 0.22s ease;';
+    iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;opacity:0;visibility:hidden;pointer-events:none;z-index:1;transition:opacity 0.22s ease;';
     iframe.setAttribute('allow', 'autoplay; fullscreen; xr-spatial-tracking');
     iframe.setAttribute('allowfullscreen', '');
     if (this.poolContainer) this.poolContainer.appendChild(iframe);
@@ -114,7 +286,9 @@ class SketchfabPoolEngine {
       asset, iframe, api: null, ready: false,
       parts: [], materials: [], strategy: '', polys: 0, verts: 0,
       camScale: 0.85, baselineCam: null, explodeVal: 0, shaderMode: 'rendered', lightDeg: 0,
-      userInteracting: false, programmaticCamMoving: false
+      userInteracting: false,
+      programmaticCamUntil: 0,
+      explodingUntil: 0
     };
     this.instances.set(asset.id, ctx);
 
@@ -130,10 +304,16 @@ class SketchfabPoolEngine {
         api.addEventListener('viewerready', () => {
           ctx.ready = true;
 
-          api.addEventListener('camerastart', () => { if (!ctx.programmaticCamMoving) ctx.userInteracting = true; });
+          api.addEventListener('camerastart', () => {
+            if (Date.now() >= ctx.programmaticCamUntil) {
+              ctx.userInteracting = true;
+            }
+          });
           api.addEventListener('cameraend', () => {
-            if (!ctx.programmaticCamMoving) this.syncCameraBaseline(ctx);
-            setTimeout(() => { ctx.userInteracting = false; }, 1200);
+            if (Date.now() >= ctx.programmaticCamUntil) {
+              this.syncCameraBaseline(ctx);
+              setTimeout(() => { ctx.userInteracting = false; }, 1600);
+            }
           });
 
           api.getCameraLookAt((err, cam) => {
@@ -183,6 +363,7 @@ class SketchfabPoolEngine {
     this.instances.forEach((ctx, id) => {
       const active = id === asset.id;
       ctx.iframe.style.opacity = active ? '1' : '0';
+      ctx.iframe.style.visibility = active ? 'visible' : 'hidden';
       ctx.iframe.style.pointerEvents = active ? 'auto' : 'none';
       ctx.iframe.style.zIndex = active ? '10' : '1';
     });
@@ -191,15 +372,44 @@ class SketchfabPoolEngine {
     else Bus.emit('engine:loading');
   }
 
-  startOrbitLoop() {
-    this.orbitTimer = setInterval(() => {
+  /**
+   * ✅ 真正的 360° 轨道转台引擎（绕 Sketchfab Z-Up 垂直轴丝滑水平旋转相机，同时兼容爆炸缩放距离）
+   */
+  startTurntableLoop() {
+    const step = (now) => {
+      requestAnimationFrame(step);
+      if (now - this.lastOrbitFrame < 38) return; // 稳定 ~26FPS，极度顺滑且不抢带宽
+      this.lastOrbitFrame = now;
+
       const ctx = this.activeCtx;
-      if (!ctx || !ctx.ready || !ctx.api || !this.autoOrbitEnabled || ctx.userInteracting) return;
-      ctx.lightDeg = (ctx.lightDeg + 1.2) % 360;
-      ctx.api.setEnvironment({ enable: true, rotation: (ctx.lightDeg * Math.PI) / 180 });
-      const ls = document.getElementById('light-slider'), ld = document.getElementById('light-deg');
-      if (ls && ld) { ls.value = Math.round(ctx.lightDeg); ld.textContent = Math.round(ctx.lightDeg) + '°'; }
-    }, 90);
+      const heroOverlay = document.getElementById('hero-overlay');
+      const heroVisible = heroOverlay && !heroOverlay.classList.contains('hidden');
+      if (heroVisible) return;
+
+      if (!ctx || !ctx.ready || !ctx.api || !this.autoOrbitEnabled) return;
+      if (ctx.userInteracting || Date.now() < ctx.explodingUntil || !ctx.baselineCam) return;
+
+      // 绕 Z 轴水平旋转相机基准向量（每次旋转 ~0.35°）
+      const dAngle = 0.006;
+      const cosA = Math.cos(dAngle), sinA = Math.sin(dAngle);
+      const v = ctx.baselineCam.baseVec;
+      const nx = v[0] * cosA - v[1] * sinA;
+      const ny = v[0] * sinA + v[1] * cosA;
+      v[0] = nx;
+      v[1] = ny;
+
+      const z = this.getZoomMultiplier(ctx.explodeVal);
+      const t = ctx.baselineCam.target;
+
+      // 时间戳保护，确保不会被 cameraend 误判为用户拖动
+      ctx.programmaticCamUntil = Date.now() + 260;
+      ctx.api.setCameraLookAt(
+        [t[0] + v[0] * z, t[1] + v[1] * z, t[2] + v[2] * z],
+        t,
+        0.001
+      );
+    };
+    requestAnimationFrame(step);
   }
 
   toggleAutoOrbit() {
@@ -210,8 +420,7 @@ class SketchfabPoolEngine {
   captureBaseline(currentSliderVal) {
     const ctx = this.activeCtx;
     if (!ctx || !ctx.ready || !ctx.api) return Promise.resolve();
-    const factor = (parseFloat(currentSliderVal) || 0) / 100;
-    const zoomMult = 1 + factor * (this.mode === 'linear' ? 0.55 : 0.35);
+    const zoomMult = this.getZoomMultiplier(currentSliderVal);
     return new Promise((resolve) => {
       ctx.api.getCameraLookAt((err, cam) => {
         if (!err && cam) {
@@ -237,14 +446,21 @@ class SketchfabPoolEngine {
     this.toastTimer = setTimeout(() => toast.classList.add('opacity-0'), 1400);
   }
 
-  explode(percent, adjustCam = true, durationSec = 0.38) {
+  /**
+   * ✅ 修复后的全百分比丝滑爆炸 + 中心锁定镜头自适应缩放
+   */
+  explode(percent, adjustCam = true, durationSec = 0.42) {
     const ctx = this.activeCtx;
     if (!ctx || !ctx.ready || !ctx.api || ctx.parts.length <= 1) return;
 
     ctx.explodeVal = parseFloat(percent) || 0;
-    const factor = ctx.explodeVal / 100;
-    const positions = SceneGraphMath.evaluateExplosionFrame(ctx.parts, ctx.explodeVal, this.mode);
+    const now = Date.now();
+    // 爆炸期间暂停转台与背景重绘，把 100% 显卡算力让给 3D 零件！
+    ctx.explodingUntil = now + durationSec * 1000 + 280;
+    AnimeGridStage.setExplodeProgress(ctx.explodeVal / 100);
+    AnimeGridStage.yieldToWebGL(Math.min(260, durationSec * 600));
 
+    const positions = SceneGraphMath.evaluateExplosionFrame(ctx.parts, ctx.explodeVal, this.mode);
     ctx.parts.forEach((p, idx) => {
       if (positions[idx]) {
         ctx.api.translate(p.instanceID, positions[idx], { duration: durationSec, easing: 'easeOutQuad' });
@@ -252,24 +468,39 @@ class SketchfabPoolEngine {
     });
 
     if (adjustCam && ctx.baselineCam) {
-      const z = 1 + factor * (this.mode === 'linear' ? 0.55 : 0.35);
+      const z = this.getZoomMultiplier(ctx.explodeVal);
       const t = ctx.baselineCam.target;
       const v = ctx.baselineCam.baseVec;
-      ctx.programmaticCamMoving = true;
+      // 关键修复：时间戳锁持续覆盖整个相机动画周期，防止 cameraend 误覆写基准！
+      ctx.programmaticCamUntil = now + durationSec * 1000 + 450;
       ctx.api.setCameraLookAt(
         [t[0] + v[0] * z, t[1] + v[1] * z, t[2] + v[2] * z],
         t,
-        durationSec,
-        () => setTimeout(() => { ctx.programmaticCamMoving = false; }, 60)
+        durationSec
       );
       this.showCamToast();
     }
+  }
+
+  recenter() {
+    const ctx = this.activeCtx;
+    if (!ctx || !ctx.ready || !ctx.api) return;
+    ctx.programmaticCamUntil = Date.now() + 900;
+    ctx.api.recenterCamera(() => {
+      setTimeout(() => {
+        ctx.programmaticCamUntil = 0;
+        this.syncCameraBaseline(ctx);
+      }, 650);
+    });
   }
 
   setShading(mode) {
     const ctx = this.activeCtx;
     if (!ctx || !ctx.ready || !ctx.api) return;
     ctx.shaderMode = mode;
+
+    const shaderDef = STUDIO_SHADERS.find(s => s.id === mode);
+    if (shaderDef) AnimeGridStage.setAccent(shaderDef.rgb);
 
     if (mode === 'wire') { ctx.api.setShadingStyle('lit'); ctx.api.setWireframe(true, { color: 'F5792AFF' }); return; }
     ctx.api.setWireframe(false);
@@ -342,6 +573,7 @@ const StudioUI = {
   drawerOpen: true,
 
   init() {
+    AnimeGridStage.init();
     this.engine = new SketchfabPoolEngine();
     this.initSpotlight();
     this.renderShaderBar();
@@ -351,18 +583,22 @@ const StudioUI = {
     this.selectAsset(STUDIO_ASSETS[0].id);
   },
 
+  // 零卡顿追光：仅计算鼠标当前悬停的那 1 张卡片
   initSpotlight() {
     document.addEventListener('mousemove', (e) => {
-      const heroSpot = document.getElementById('hero-spotlight');
-      if (heroSpot) {
-        heroSpot.style.background = `radial-gradient(650px circle at ${e.clientX}px ${e.clientY}px, rgba(245, 121, 42, 0.14), transparent 70%)`;
+      const heroOverlay = document.getElementById('hero-overlay');
+      if (heroOverlay && !heroOverlay.classList.contains('hidden')) {
+        const heroSpot = document.getElementById('hero-spotlight');
+        if (heroSpot) {
+          heroSpot.style.background = `radial-gradient(620px circle at ${e.clientX}px ${e.clientY}px, rgba(245, 121, 42, 0.13), transparent 70%)`;
+        }
       }
-      document.querySelectorAll('.spotlight-card').forEach(card => {
-        const rect = card.getBoundingClientRect();
-        card.style.setProperty('--mouse-x', `${e.clientX - rect.left}px`);
-        card.style.setProperty('--mouse-y', `${e.clientY - rect.top}px`);
-      });
-    });
+      const card = e.target.closest('.spotlight-card');
+      if (!card) return;
+      const rect = card.getBoundingClientRect();
+      card.style.setProperty('--mouse-x', `${e.clientX - rect.left}px`);
+      card.style.setProperty('--mouse-y', `${e.clientY - rect.top}px`);
+    }, { passive: true });
   },
 
   closeHero() {
@@ -396,7 +632,7 @@ const StudioUI = {
 
   renderShaderBar() {
     document.getElementById('shader-toolbar').innerHTML = STUDIO_SHADERS.map(s =>
-      `<button data-action="shader" data-mode="${s.id}" id="btn-shade-${s.id}" class="px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">${s.label}</button>`
+      `<button data-action="shader" data-mode="${s.id}" id="btn-shade-${s.id}" class="px-2.5 py-1 rounded-lg text-zinc-400 hover:text-white transition">${s.label}</button>`
     ).join('');
   },
 
@@ -413,7 +649,7 @@ const StudioUI = {
             ${badge}
           </div>
           <div class="text-xs font-bold font-header text-white truncate relative z-10 pointer-events-none">${item.title}</div>
-          <div class="text-[10px] text-slate-400 truncate relative z-10 pointer-events-none">${item.sub}</div>
+          <div class="text-[10px] text-zinc-400 truncate relative z-10 pointer-events-none">${item.sub}</div>
         </button>`;
     }).join('');
   },
@@ -424,7 +660,7 @@ const StudioUI = {
       if (btn) {
         btn.className = s.id === mode
           ? 'px-2.5 py-1 rounded-lg bg-orange-500/25 border border-orange-400/50 text-orange-200 font-bold transition'
-          : 'px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition';
+          : 'px-2.5 py-1 rounded-lg text-zinc-400 hover:text-white transition';
       }
     });
   },
@@ -432,8 +668,8 @@ const StudioUI = {
   setExplodeModeUI(mode) {
     this.engine.mode = mode;
     const isCard = mode === 'cardinal';
-    document.getElementById('btn-mode-cardinal').className = isCard ? 'px-2.5 py-1 rounded-md bg-orange-500/30 text-orange-200 font-bold transition' : 'px-2.5 py-1 rounded-md text-slate-400 hover:text-white transition';
-    document.getElementById('btn-mode-linear').className = !isCard ? 'px-2.5 py-1 rounded-md bg-orange-500/30 text-orange-200 font-bold transition' : 'px-2.5 py-1 rounded-md text-slate-400 hover:text-white transition';
+    document.getElementById('btn-mode-cardinal').className = isCard ? 'px-2.5 py-1 rounded-md bg-orange-500/30 text-orange-200 font-bold transition' : 'px-2.5 py-1 rounded-md text-zinc-400 hover:text-white transition';
+    document.getElementById('btn-mode-linear').className = !isCard ? 'px-2.5 py-1 rounded-md bg-orange-500/30 text-orange-200 font-bold transition' : 'px-2.5 py-1 rounded-md text-zinc-400 hover:text-white transition';
   },
 
   selectAsset(id) {
@@ -455,7 +691,7 @@ const StudioUI = {
           <span class="text-xs font-bold text-white font-header"><b class="text-orange-400 font-mono mr-1.5">${w.step}</b>${w.title}</span>
           <span class="text-[9px] px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300">${w.tag} ➔</span>
         </div>
-        <div class="text-[10px] text-slate-400 relative z-10 pointer-events-none">${w.desc}</div>
+        <div class="text-[10px] text-zinc-400 relative z-10 pointer-events-none">${w.desc}</div>
       </div>
     `).join('');
 
@@ -463,7 +699,12 @@ const StudioUI = {
     const savedExp = ctx ? Math.round(ctx.explodeVal || 0) : 0;
     document.getElementById('explode-slider').value = savedExp;
     document.getElementById('explode-percent').textContent = savedExp + '%';
-    this.highlightShader(ctx ? ctx.shaderMode : 'rendered');
+    AnimeGridStage.setExplodeProgress(savedExp / 100);
+
+    const savedShader = ctx ? ctx.shaderMode : 'rendered';
+    this.highlightShader(savedShader);
+    const shaderDef = STUDIO_SHADERS.find(s => s.id === savedShader);
+    if (shaderDef) AnimeGridStage.setAccent(shaderDef.rgb);
 
     this.engine.selectModel(asset);
   },
@@ -477,7 +718,7 @@ const StudioUI = {
       btn.className = 'px-2.5 py-1 rounded-lg bg-orange-500/20 border border-orange-500/40 text-orange-200 transition';
     } else {
       panel.classList.add('translate-x-[120%]', 'opacity-0', 'pointer-events-none');
-      btn.className = 'px-2.5 py-1 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition';
+      btn.className = 'px-2.5 py-1 rounded-lg text-zinc-300 hover:text-white hover:bg-white/10 transition';
     }
   },
 
@@ -486,7 +727,7 @@ const StudioUI = {
     await this.engine.captureBaseline(slider.value);
     slider.value = target;
     document.getElementById('explode-percent').textContent = Math.round(target) + '%';
-    this.engine.explode(target, true, 0.65);
+    this.engine.explode(target, true, 0.60);
   },
 
   bindBus() {
@@ -519,10 +760,10 @@ const StudioUI = {
       } else {
         listEl.innerHTML = ctx.parts.map((p, idx) => `
           <div class="flex items-center justify-between px-2 py-1 rounded-lg bg-white/[0.03] border border-white/[0.05]">
-            <span class="text-slate-200 truncate max-w-[160px]"><b class="text-orange-400 mr-1">#${idx + 1}</b>${p.name}</span>
+            <span class="text-zinc-200 truncate max-w-[160px]"><b class="text-orange-400 mr-1">#${idx + 1}</b>${p.name}</span>
             <div class="flex gap-1">
               <button data-action="pulse-part" data-idx="${idx}" class="px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-200 text-[9px]">${p.pulsed ? '收回' : '弹出'}</button>
-              <button data-action="vis-part" data-idx="${idx}" class="px-1.5 py-0.5 rounded bg-white/10 text-slate-300 text-[9px]">${p.visible ? '显隐' : '已隐'}</button>
+              <button data-action="vis-part" data-idx="${idx}" class="px-1.5 py-0.5 rounded bg-white/10 text-zinc-300 text-[9px]">${p.visible ? '显隐' : '已隐'}</button>
             </div>
           </div>`).join('');
       }
@@ -539,12 +780,12 @@ const StudioUI = {
       if (act === 'open-hero') this.openHero();
       if (act === 'select-asset') this.selectAsset(btn.dataset.id);
       if (act === 'toggle-drawer') this.toggleDrawer();
-      if (act === 'recenter' && this.engine.ready) this.engine.api.recenterCamera();
+      if (act === 'recenter') this.engine.recenter();
       if (act === 'screenshot') this.engine.exportScreenshot();
 
       if (act === 'toggle-orbit') {
         const on = this.engine.toggleAutoOrbit();
-        btn.className = on ? 'flex items-center gap-1.5 text-emerald-400 hover:text-emerald-300 transition' : 'flex items-center gap-1.5 text-slate-500 hover:text-slate-300 transition';
+        btn.className = on ? 'flex items-center gap-1.5 text-emerald-400 hover:text-emerald-300 transition' : 'flex items-center gap-1.5 text-zinc-500 hover:text-zinc-300 transition';
         btn.innerHTML = on ? `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span><span>转台: ON</span>` : `<span>转台: OFF</span>`;
       }
 
@@ -591,11 +832,12 @@ const StudioUI = {
     expSlider.addEventListener('input', (e) => {
       const val = parseFloat(e.target.value) || 0;
       document.getElementById('explode-percent').textContent = Math.round(val) + '%';
+      AnimeGridStage.setExplodeProgress(val / 100);
       if (throttleTimer) return;
       throttleTimer = setTimeout(() => {
         throttleTimer = null;
-        this.engine.explode(expSlider.value, true, 0.38);
-      }, 120);
+        this.engine.explode(expSlider.value, true, 0.40);
+      }, 150);
     });
     expSlider.addEventListener('change', (e) => {
       if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
