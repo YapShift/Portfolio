@@ -1,9 +1,9 @@
 /**
- * 纯 3D 场景树递归、六向正交朝外爆炸与实时逐帧方框 Hitbox (AABB) 防重叠解算模块 (scene-math.js v13.0)
- * 核心升级：
- *  1. 由外向内“剥洋葱”分段拆解时序 (Outside-In Staggered Schedule)：外层零件率先起步腾出空间，内层零件随后跟进，彻底杜绝中途追尾穿模
- *  2. 实时逐帧方框 Hitbox (AABB) 碰撞解算 (evaluateExplosionFrame)：在 1%~100% 的任意滑块进度下，实时检测并沿正交朝外轴排斥任何重叠的简易方框 Hitbox！
- *  3. 严格限制爆炸方向为【上(+Y)、下(-Y)、左(-X)、右(+X)、前(+Z)、后(-Z)】6 个正交朝外方向
+ * 3D 场景树递归、六向正交朝外爆炸与紧凑 Hitbox 驱动解算模块 (scene-math.js v14.0)
+ * 核心特性：
+ *  1. 严格限制爆炸角度为【右(+X)、左(-X)、上(+Y)、下(-Y)、前(+Z)、后(-Z)】6 个正交朝外方向
+ *  2. 展开距离严格由各零件简易方框 Hitbox (AABB) 尺寸决定，保留高密集装配感，不飞散
+ *  3. 1% 起步即进入“方框 Hitbox 零重叠最小紧凑态 (1.00x)”，1%~100% 平滑线性外扩 (1.00x -> 1.65x)，全程 0 突变、0 穿模
  */
 window.SceneGraphMath = {
   IGNORE_NAME_RE: /^(root|scene|world|ground|floor|plane|shadow|stage|backdrop|camera|light|env|sky|grid|base_plane|shadow_plane|sketchfab_model|gltf_scene)/i,
@@ -37,7 +37,8 @@ window.SceneGraphMath = {
     ];
   },
 
-  checkBoxHitboxOverlap(posA, halfA, posB, halfB, padding = 1.08) {
+  // 3D 简易方框型 Hitbox (AABB) 重叠检测（padding=1.06 仅留 6% 紧凑间隙）
+  checkBoxHitboxOverlap(posA, halfA, posB, halfB, padding = 1.06) {
     const ox = (halfA[0] + halfB[0]) * padding - Math.abs(posA[0] - posB[0]);
     if (ox <= 0) return null;
     const oy = (halfA[1] + halfB[1]) * padding - Math.abs(posA[1] - posB[1]);
@@ -45,12 +46,6 @@ window.SceneGraphMath = {
     const oz = (halfA[2] + halfB[2]) * padding - Math.abs(posA[2] - posB[2]);
     if (oz <= 0) return null;
     return [ox, oy, oz];
-  },
-
-  smoothstep(edge0, edge1, x) {
-    if (edge1 <= edge0) return x >= edge1 ? 1 : 0;
-    const t = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
-    return t * t * (3 - 2 * t);
   },
 
   assignOrthogonalOutwardAxes(extracted, center, maxSpread) {
@@ -90,7 +85,11 @@ window.SceneGraphMath = {
     return assignments;
   },
 
-  buildScheduleAndTargets(extracted, center, baseStep, mode = 'cardinal6') {
+  /**
+   * 严格根据简易方框型 Hitbox (AABB) 大小，解算每个零件的“最小无重叠紧凑分离距离 (minClearDist)”
+   * 该状态直接作为 1% 时的初始分开状态，保留最大密集感，绝不隔开太远！
+   */
+  solveTightHitboxClearance(extracted, boxHalves, center, mode = 'cardinal6') {
     const count = extracted.length;
     const dirs = extracted.map((p, idx) => {
       if (mode === 'axial') {
@@ -100,9 +99,10 @@ window.SceneGraphMath = {
       return p.cardinalAxis.vec.slice();
     });
 
-    const targetDists = new Array(count).fill(0);
-    const startTs = new Array(count).fill(0);
-    const endTs = new Array(count).fill(1);
+    const axisIdxOf = dirs.map(d => (Math.abs(d[0]) > 0.5 ? 0 : (Math.abs(d[1]) > 0.5 ? 1 : 2)));
+
+    // 1. 按同方向由内到外排序，初始位移严格等于自身方框 Hitbox 在该轴上的半厚度（刚好让出中心）
+    const minDists = new Array(count).fill(0);
     const groupsByDir = {};
 
     extracted.forEach((p, idx) => {
@@ -115,83 +115,55 @@ window.SceneGraphMath = {
 
     Object.values(groupsByDir).forEach(list => {
       list.sort((a, b) => a.proj - b.proj);
-      const len = list.length;
+      let cursor = 0;
       list.forEach((item, rank) => {
-        const tierRatio = (rank + 1) / len;
-        targetDists[item.idx] = baseStep * (0.30 + 0.60 * tierRatio);
-
-        // 由外向内“剥洋葱”分段拆解时序：最外层 t=0.00 先起步，最内层等外层腾出空间后才起步
-        const outerRatio = len > 1 ? (len - 1 - rank) / (len - 1) : 0;
-        startTs[item.idx] = outerRatio * 0.36;
-        endTs[item.idx] = Math.min(1.0, startTs[item.idx] + 0.64);
+        const i = item.idx;
+        const h = boxHalves[i][axisIdxOf[i]];
+        // 紧贴上一个零件的方框外沿 + 极小安全间隙，严格按碰撞箱厚度排布
+        if (rank === 0) {
+          minDists[i] = h * 0.85;
+          cursor = minDists[i] + h * 1.06;
+        } else {
+          minDists[i] = cursor + h * 1.06;
+          cursor = minDists[i] + h * 1.06;
+        }
       });
     });
 
-    return { dirs, targetDists, startTs, endTs };
-  },
-
-  evaluateExplosionFrame(parts, percent, pattern = 'radial') {
-    const count = parts.length;
-    if (count <= 1) return [];
-
-    const globalT = Math.max(0, Math.min(1, (parseFloat(percent) || 0) / 100));
-    if (globalT <= 1e-4) {
-      return parts.map(p => p.origPos.slice());
-    }
-
-    const isAxial = pattern === 'axial';
-    const baseStep = parts[0].baseStep || 1;
-    const maxClampDist = baseStep * 1.40;
-
-    const dirs = new Array(count);
-    const curDists = new Array(count);
-
-    for (let i = 0; i < count; i++) {
-      const p = parts[i];
-      const sched = isAxial ? p.axialSchedule : p.cardinalSchedule;
-      dirs[i] = sched.dir;
-      const localProgress = this.smoothstep(sched.startT, sched.endT, globalT);
-      curDists[i] = sched.targetDist * localProgress;
-    }
-
-    const hitboxStrength = Math.min(1.0, globalT / 0.12);
-    const maxIterations = 12;
-
+    // 2. 全局 3D 简易方框 Hitbox (AABB) 碰撞收敛检测：
+    //    确保不同正交轴（例如 +X 和 +Y）在中心附近也不会互相重叠，推开量严格等于重叠深度
+    const maxIterations = 24;
     for (let iter = 0; iter < maxIterations; iter++) {
       let anyOverlap = false;
 
       for (let i = 0; i < count; i++) {
         for (let j = i + 1; j < count; j++) {
           const posI = [
-            parts[i].origPos[0] + dirs[i][0] * curDists[i],
-            parts[i].origPos[1] + dirs[i][1] * curDists[i],
-            parts[i].origPos[2] + dirs[i][2] * curDists[i]
+            extracted[i].origPos[0] + dirs[i][0] * minDists[i],
+            extracted[i].origPos[1] + dirs[i][1] * minDists[i],
+            extracted[i].origPos[2] + dirs[i][2] * minDists[i]
           ];
           const posJ = [
-            parts[j].origPos[0] + dirs[j][0] * curDists[j],
-            parts[j].origPos[1] + dirs[j][1] * curDists[j],
-            parts[j].origPos[2] + dirs[j][2] * curDists[j]
+            extracted[j].origPos[0] + dirs[j][0] * minDists[j],
+            extracted[j].origPos[1] + dirs[j][1] * minDists[j],
+            extracted[j].origPos[2] + dirs[j][2] * minDists[j]
           ];
 
-          const overlap = this.checkBoxHitboxOverlap(posI, parts[i].boxHalf, posJ, parts[j].boxHalf, 1.08);
+          const overlap = this.checkBoxHitboxOverlap(posI, boxHalves[i], posJ, boxHalves[j], 1.06);
           if (!overlap) continue;
 
           anyOverlap = true;
-          const axisI = Math.abs(dirs[i][0]) > 0.5 ? 0 : (Math.abs(dirs[i][1]) > 0.5 ? 1 : 2);
-          const axisJ = Math.abs(dirs[j][0]) > 0.5 ? 0 : (Math.abs(dirs[j][1]) > 0.5 ? 1 : 2);
+          const axI = axisIdxOf[i];
+          const axJ = axisIdxOf[j];
 
-          if (axisI === axisJ) {
-            const push = (overlap[axisI] * 0.6 + baseStep * 0.02) * hitboxStrength;
-            if (curDists[i] >= curDists[j]) {
-              curDists[i] = Math.min(maxClampDist, curDists[i] + push);
-            } else {
-              curDists[j] = Math.min(maxClampDist, curDists[j] + push);
-            }
+          if (axI === axJ) {
+            const push = overlap[axI] * 0.55;
+            if (minDists[i] >= minDists[j]) minDists[i] += push;
+            else minDists[j] += push;
           } else {
-            const pushI = Math.min(overlap[axisI] * 0.45, baseStep * 0.10) * hitboxStrength;
-            const pushJ = Math.min(overlap[axisJ] * 0.45, baseStep * 0.10) * hitboxStrength;
-            curDists[i] = Math.min(maxClampDist, curDists[i] + pushI);
-            curDists[j] = Math.min(maxClampDist, curDists[j] + pushJ);
+            // 不同轴擦碰：各自只沿自己的正交朝外轴推开刚好不重叠的最小量
+            minDists[i] += overlap[axI] * 0.35;
+            minDists[j] += overlap[axJ] * 0.35;
           }
         }
       }
@@ -199,11 +171,38 @@ window.SceneGraphMath = {
       if (!anyOverlap) break;
     }
 
-    return parts.map((p, i) => [
-      p.origPos[0] + dirs[i][0] * curDists[i],
-      p.origPos[1] + dirs[i][1] * curDists[i],
-      p.origPos[2] + dirs[i][2] * curDists[i]
-    ]);
+    return { dirs, minDists };
+  },
+
+  /**
+   * 丝滑逐帧位置求值：
+   *  - 0%        -> 完全闭合 (origPos)
+   *  - 1%        -> 立刻分开到 Hitbox 最小无重叠紧凑态 (1.00x minClearDist)
+   *  - 1% ~ 100% -> 纯线性平滑外扩 (1.00x -> 1.65x)，全程 0 突变、0 重叠、高密集感！
+   */
+  evaluateExplosionFrame(parts, percent, pattern = 'radial') {
+    const count = parts.length;
+    if (count <= 1) return [];
+
+    const pVal = Math.max(0, Math.min(100, parseFloat(percent) || 0));
+    if (pVal <= 0.01) {
+      return parts.map(p => p.origPos.slice());
+    }
+
+    const isAxial = pattern === 'axial';
+    // 1% 时 u=0 (scale=1.00，刚好按 Hitbox 分开)；100% 时 u=1 (scale=1.65，紧凑外扩)
+    const u = Math.max(0, (pVal - 1) / 99);
+    const scale = 1.0 + 0.65 * u;
+
+    return parts.map(p => {
+      const cfg = isAxial ? p.axialTight : p.cardinalTight;
+      const d = cfg.minDist * scale;
+      return [
+        p.origPos[0] + cfg.dir[0] * d,
+        p.origPos[1] + cfg.dir[1] * d,
+        p.origPos[2] + cfg.dir[2] * d
+      ];
+    });
   },
 
   analyzeAndBuildVectors(nodeMap, cameraDistanceScale = 1.0) {
@@ -238,14 +237,14 @@ window.SceneGraphMath = {
 
     if (leafTransforms.length > 1) {
       rawNodes = leafTransforms;
-      strategy = `LIVE-HITBOX 6-WAY (${leafTransforms.length})`;
+      strategy = `TIGHT-HITBOX 6-WAY (${leafTransforms.length})`;
     } else if (leafTransforms.length === 1) {
       const childrenWithGeo = (leafTransforms[0].children || [])
         .map(ch => typeof ch === 'object' ? (nodeMap[ch.instanceID] || ch) : nodeMap[ch])
         .filter(ch => ch && this.hasGeometryInSubtree(ch, nodeMap));
       if (childrenWithGeo.length > 1) {
         rawNodes = childrenWithGeo;
-        strategy = `LIVE-HITBOX GROUP (${childrenWithGeo.length})`;
+        strategy = `TIGHT-HITBOX GROUP (${childrenWithGeo.length})`;
       } else {
         rawNodes = leafTransforms;
       }
@@ -296,53 +295,47 @@ window.SceneGraphMath = {
       if (d > maxLocalSpread) maxLocalSpread = d;
     });
 
+    // 紧凑参考单元尺寸（专门压小以生成贴身的简易方框 Hitbox，保持高密集感）
     const avgParentScale = extracted.reduce((acc, p) => acc + p.parentScaleRatio, 0) / count;
-    const camStepInLocal = (cameraDistanceScale * 0.35) / (avgParentScale || 1);
-    const baseStep = maxLocalSpread > 1e-3
-      ? Math.min(maxLocalSpread * 0.38, camStepInLocal * 1.2)
-      : camStepInLocal;
+    const camRefUnit = (cameraDistanceScale * 0.22) / (avgParentScale || 1);
+    const refUnit = maxLocalSpread > 1e-3
+      ? Math.min(maxLocalSpread * 0.22, camRefUnit)
+      : camRefUnit;
 
     const assignedAxes = this.assignOrthogonalOutwardAxes(extracted, center, maxLocalSpread);
     extracted.forEach((p, idx) => { p.cardinalAxis = assignedAxes[idx]; });
 
-    const cardinalSched = this.buildScheduleAndTargets(extracted, center, baseStep, 'cardinal6');
-    const axialSched = this.buildScheduleAndTargets(extracted, center, baseStep, 'axial');
-
-    const parts = extracted.map((p, idx) => {
+    // 按各零件自身局部矩阵比例生成紧贴的简易方框 Hitbox 半尺寸 [hx, hy, hz]
+    const boxHalves = extracted.map(p => {
       const s = p.localScale || [1, 1, 1];
       const norm = Math.cbrt(s[0] * s[1] * s[2]) || 1;
-      const unitBox = baseStep * 0.20;
-      const boxHalf = [
-        unitBox * Math.max(0.55, Math.min(1.5, s[0] / norm)),
-        unitBox * Math.max(0.55, Math.min(1.5, s[1] / norm)),
-        unitBox * Math.max(0.55, Math.min(1.5, s[2] / norm))
+      const baseHalf = refUnit * 0.36;
+      return [
+        baseHalf * Math.max(0.55, Math.min(1.45, s[0] / norm)),
+        baseHalf * Math.max(0.55, Math.min(1.45, s[1] / norm)),
+        baseHalf * Math.max(0.55, Math.min(1.45, s[2] / norm))
       ];
+    });
 
-      const cDir = cardinalSched.dirs[idx];
-      const cDist = cardinalSched.targetDists[idx];
-      const aDir = axialSched.dirs[idx];
-      const aDist = axialSched.targetDists[idx];
+    // 严格由简易方框 Hitbox 解算最小紧凑分离距离
+    const cardinalTight = this.solveTightHitboxClearance(extracted, boxHalves, center, 'cardinal6');
+    const axialTight = this.solveTightHitboxClearance(extracted, boxHalves, center, 'axial');
+
+    const parts = extracted.map((p, idx) => {
+      const cDir = cardinalTight.dirs[idx];
+      const cDist = cardinalTight.minDists[idx];
+      const aDir = axialTight.dirs[idx];
+      const aDist = axialTight.minDists[idx];
 
       return {
         instanceID: p.instanceID,
         name: `${p.name} [${p.cardinalAxis.id}]`,
         nodeType: p.nodeType,
         origPos: p.origPos,
-        baseStep,
-        boxHalf,
-        cardinalSchedule: {
-          dir: cDir,
-          targetDist: cDist,
-          startT: cardinalSched.startTs[idx],
-          endT: cardinalSched.endTs[idx]
-        },
-        axialSchedule: {
-          dir: aDir,
-          targetDist: aDist,
-          startT: axialSched.startTs[idx],
-          endT: axialSched.endTs[idx]
-        },
-        localRadialVec: [cDir[0] * cDist, cDir[1] * cDist, cDir[2] * cDist],
+        boxHalf: boxHalves[idx],
+        cardinalTight: { dir: cDir, minDist: cDist },
+        axialTight: { dir: aDir, minDist: aDist },
+        localRadialVec: [cDir[0] * cDist * 1.4, cDir[1] * cDist * 1.4, cDir[2] * cDist * 1.4],
         visible: true,
         pulsed: false
       };
