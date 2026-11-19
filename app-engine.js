@@ -1,10 +1,8 @@
 /**
- * YapShift 3D Studio Engine (app-engine.js v21.0)
- * 1. 修复模型切换（移除导致 WebGL 挂起的 visibility: hidden）
- * 2. 模型自转转台（直接旋转模型根节点，绝不锁定或干扰用户相机！）
- * 3. 部件独显隔离模式（选中只显示所选部件，未选中时全显示）
- * 4. 零顿挫爆炸控制（拖动期间 55ms + easeLinear 匀速追踪，松手/一键按钮用 easeOutCubic 丝滑落位）
- * 5. Anime.js v4 风格精密点阵背景舞台
+ * YapShift 3D Studio Engine (app-engine.js v22.0)
+ * 1. 精确原地水平自转（绕模型几何中心世界 Z 轴旋转根节点矩阵，绝不翻跟头、绝不偏心、绝不锁镜头）
+ * 2. 零顿挫爆炸控制（拖动滑块时采用 duration: 0 瞬时同步且不抢相机，松手或点按钮才执行单次 0.7s GPU 原生 easeOutCubic 过渡）
+ * 3. 多模型并行预载秒切 + 部件独显隔离 + Anime.js v4 风格精密背景舞台
  */
 
 const STUDIO_ASSETS = [
@@ -14,11 +12,11 @@ const STUDIO_ASSETS = [
     sub: 'Suspention Assembly',
     category: 'MECHANICAL / HARD-SURFACE',
     uid: '08632550c5604444a14b53dc339b6589',
-    desc: '精密避震弹簧、上下控制臂与轴承座装配总成，支持防碰撞六向正交拆解、工程线性排布与独立部件隔离。',
+    desc: '精密避震弹簧、上下控制臂与轴承座装配总成，支持防碰撞径向立体拆解、主轴线性排布与独立部件隔离。',
     tags: ['Hard-Surface', 'Multi-Part', 'PBR Metal'],
     workflow: [
-      { step: '01', title: '六向正交立体拆解', tag: '65%', action: 'explode65', desc: '沿上下左右前后正交推开，AABB 方框碰撞自动避让。' },
-      { step: '02', title: '工程一字线性排布', tag: 'QUEUE', action: 'linear65', desc: '沿水平主轴展开全部零件，一览装配清单。' },
+      { step: '01', title: '立体径向防碰撞拆解', tag: '65%', action: 'explode65', desc: '顺应真实装配方位向外平滑散开，AABB 方框碰撞自动避让。' },
+      { step: '02', title: '工程主轴线性排布', tag: 'QUEUE', action: 'linear65', desc: '沿模型最长装配主轴展开零件队列，一览全件结构。' },
       { step: '03', title: 'X-Ray 内腔透视', tag: 'X-RAY', action: 'xray', desc: '切换 28% 半透明态，直视内部活塞杆与轴套配合。' }
     ]
   },
@@ -109,7 +107,6 @@ const AnimeGridStage = {
     const cx = w * 0.5, cy = h * 0.5;
     const rgb = this.accentRGB;
 
-    // 1. 柔和摄影棚中心顶光
     const studioGlow = ctx.createRadialGradient(cx, cy, 30, cx, cy, Math.max(w, h) * 0.52);
     studioGlow.addColorStop(0, `rgba(${rgb}, ${0.055 + this.explodeT * 0.035})`);
     studioGlow.addColorStop(0.5, 'rgba(255, 255, 255, 0.015)');
@@ -117,7 +114,6 @@ const AnimeGridStage = {
     ctx.fillStyle = studioGlow;
     ctx.fillRect(0, 0, w, h);
 
-    // 2. 40px 精密工程点阵与每 4 格十字坐标标
     const spacing = 40;
     const cols = Math.ceil(w / spacing);
     const rows = Math.ceil(h / spacing);
@@ -160,7 +156,6 @@ const AnimeGridStage = {
       }
     }
 
-    // 3. 极简克制的呼吸同心参考线（随爆炸进度柔和扩张）
     const rMain = Math.min(w, h) * (0.30 + this.explodeT * 0.08);
     ctx.strokeStyle = `rgba(255, 255, 255, ${0.055 + this.explodeT * 0.05})`;
     ctx.lineWidth = 1;
@@ -185,7 +180,8 @@ class SketchfabPoolEngine {
     this.activeAssetId = null;
     this.mode = 'cardinal';
     this.autoSpinEnabled = true;
-    this.startModelSpinLoop();
+    this.lastSpinTick = 0;
+    this.startInPlaceSpinLoop();
   }
 
   get activeCtx() { return this.instances.get(this.activeAssetId) || null; }
@@ -212,7 +208,7 @@ class SketchfabPoolEngine {
 
   getZoomMultiplier(explodeVal) {
     const factor = (parseFloat(explodeVal) || 0) / 100;
-    return 1 + factor * (this.mode === 'linear' ? 0.80 : 0.42);
+    return 1 + factor * (this.mode === 'linear' ? 0.65 : 0.35);
   }
 
   syncCameraBaseline(ctx) {
@@ -235,7 +231,6 @@ class SketchfabPoolEngine {
   ensureInstance(asset) {
     if (this.instances.has(asset.id)) return this.instances.get(asset.id);
 
-    // 关键修复：绝不设置 visibility: hidden，否则第二个模型的 WebGL 会被浏览器挂起导致无法切换！
     const iframe = document.createElement('iframe');
     iframe.id = `sf-frame-${asset.id}`;
     iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;opacity:0;pointer-events:none;z-index:1;transition:opacity 0.25s ease;';
@@ -247,11 +242,12 @@ class SketchfabPoolEngine {
 
     const ctx = {
       asset, iframe, api: null, ready: false,
-      parts: [], rootNodeIDs: [], materials: [],
+      parts: [], spinRoots: [], materials: [],
       strategy: '', collisionBadge: '', polys: 0, verts: 0,
-      camScale: 0.85, baselineCam: null, explodeVal: 0, shaderMode: 'rendered', lightDeg: 0,
+      camDist: 4.0, spinCenter: [0, 0, 0], baselineCam: null,
+      explodeVal: 0, shaderMode: 'rendered', lightDeg: 0,
       spinAngle: 0,
-      selectedParts: new Set(), // 部件独显隔离集合（为空则全显示，非空则只显示选中的）
+      selectedParts: new Set(),
       programmaticCamUntil: 0,
       explodingUntil: 0
     };
@@ -280,17 +276,18 @@ class SketchfabPoolEngine {
               const vx = cam.position[0] - cam.target[0];
               const vy = cam.position[1] - cam.target[1];
               const vz = cam.position[2] - cam.target[2];
-              const dist = Math.hypot(vx, vy, vz);
-              ctx.camScale = dist > 0.01 ? dist * 0.14 : 0.85;
-              ctx.baselineCam = { target: [cam.target[0], cam.target[1], cam.target[2]], baseVec: [vx, vy, vz] };
+              ctx.camDist = Math.max(0.1, Math.hypot(vx, vy, vz));
+              // 以 Sketchfab 初始自动居中的包围盒靶心作为模型精确原地自转中心！
+              ctx.spinCenter = [cam.target[0], cam.target[1], cam.target[2]];
+              ctx.baselineCam = { target: cam.target.slice(), baseVec: [vx, vy, vz] };
             }
 
             api.getMaterialList((e1, mats) => {
               ctx.materials = (!e1 && mats) ? JSON.parse(JSON.stringify(mats)) : [];
               api.getNodeMap(async (e2, nodeMap) => {
-                const res = SceneGraphMath.analyzeAndBuildVectors(e2 ? null : nodeMap, ctx.camScale);
+                const res = SceneGraphMath.analyzeAndBuildVectors(e2 ? null : nodeMap, ctx.camDist);
                 ctx.parts = res.parts;
-                ctx.rootNodeIDs = res.rootNodeIDs;
+                ctx.spinRoots = res.spinRoots;
                 ctx.strategy = res.strategy;
                 ctx.collisionBadge = res.collisionBadge;
 
@@ -333,25 +330,29 @@ class SketchfabPoolEngine {
   }
 
   /**
-   * ✅ 不锁相机的模型自转转台：
-   * 直接旋转模型的最顶层 MatrixTransform 根节点，绝不调用 setCameraLookAt，
-   * 用户任何时候都可以自由拖拽、缩放、平移镜头！
+   * ✅ 精确原地水平自转（绕模型真实几何中心的世界 Z 轴旋转，不翻跟头、不偏心、完全不锁相机！）
    */
-  startModelSpinLoop() {
-    setInterval(() => {
+  startInPlaceSpinLoop() {
+    const tick = (now) => {
+      requestAnimationFrame(tick);
+      if (now - this.lastSpinTick < 32) return; // 稳定 ~30FPS 丝滑原地转台
+      this.lastSpinTick = now;
+
       const heroOverlay = document.getElementById('hero-overlay');
       if (heroOverlay && !heroOverlay.classList.contains('hidden')) return;
 
       const ctx = this.activeCtx;
       if (!ctx || !ctx.ready || !ctx.api || !this.autoSpinEnabled) return;
       if (Date.now() < ctx.explodingUntil) return;
-      if (!ctx.rootNodeIDs || !ctx.rootNodeIDs.length) return;
+      if (!ctx.spinRoots || !ctx.spinRoots.length) return;
 
-      ctx.spinAngle = (ctx.spinAngle + 0.032) % (Math.PI * 2);
-      ctx.rootNodeIDs.forEach(rootId => {
-        ctx.api.rotate(rootId, [ctx.spinAngle, 0, 0, 1], { duration: 0.14, easing: 'easeLinear' });
+      ctx.spinAngle = (ctx.spinAngle + 0.008) % (Math.PI * 2);
+      ctx.spinRoots.forEach(rootInfo => {
+        const localMat = SceneGraphMath.computeRootSpinLocalMatrix(rootInfo, ctx.spinCenter, ctx.spinAngle);
+        ctx.api.setMatrix(rootInfo.instanceID, localMat);
       });
-    }, 140);
+    };
+    requestAnimationFrame(tick);
   }
 
   toggleAutoSpin() {
@@ -382,10 +383,10 @@ class SketchfabPoolEngine {
 
   /**
    * ✅ 零顿挫爆炸控制：
-   * 拖动时传入 easing = 'easeLinear', durationSec = 0.07（匀速无缝追踪，彻底消除快-慢锯齿顿挫）
-   * 松手或点按钮时传入 easing = 'easeOutCubic', durationSec = 0.52（丝滑缓停落位）
+   * - 拖动滑块期间：durationSec = 0，直接瞬时更新零件坐标且不抢相机，彻底消除顿挫！
+   * - 松手或点击预设按钮：durationSec = 0.65，单次触发 GPU 原生 easeOutCubic 丝滑过渡 + 相机同步缩放！
    */
-  explode(percent, adjustCam = true, durationSec = 0.45, easing = 'easeOutCubic') {
+  explode(percent, adjustCam = true, durationSec = 0.65) {
     const ctx = this.activeCtx;
     if (!ctx || !ctx.ready || !ctx.api || ctx.parts.length <= 1) return;
 
@@ -393,16 +394,18 @@ class SketchfabPoolEngine {
     const now = Date.now();
     ctx.explodingUntil = now + durationSec * 1000 + 180;
     AnimeGridStage.setExplodeProgress(ctx.explodeVal / 100);
-    AnimeGridStage.yieldToWebGL(180);
+    if (durationSec > 0) AnimeGridStage.yieldToWebGL(220);
 
     const positions = SceneGraphMath.evaluateExplosionFrame(ctx.parts, ctx.explodeVal, this.mode);
+    const opts = durationSec > 0 ? { duration: durationSec, easing: 'easeOutCubic' } : { duration: 0 };
+
     ctx.parts.forEach((p, idx) => {
       if (positions[idx]) {
-        ctx.api.translate(p.instanceID, positions[idx], { duration: durationSec, easing });
+        ctx.api.translate(p.instanceID, positions[idx], opts);
       }
     });
 
-    if (adjustCam && ctx.baselineCam) {
+    if (adjustCam && ctx.baselineCam && durationSec > 0) {
       const z = this.getZoomMultiplier(ctx.explodeVal);
       const t = ctx.baselineCam.target;
       const v = ctx.baselineCam.baseVec;
@@ -415,11 +418,6 @@ class SketchfabPoolEngine {
     }
   }
 
-  /**
-   * ✅ 部件独显隔离模式（Solo / Isolate）：
-   * - 无选中部件 -> 显示全部零件
-   * - 有选中部件 -> 隐藏其他所有零件，只显示选中的零件
-   */
   toggleIsolatePart(idx) {
     const ctx = this.activeCtx;
     if (!ctx || !ctx.ready || !ctx.api || !ctx.parts[idx]) return;
@@ -438,11 +436,8 @@ class SketchfabPoolEngine {
   applyPartIsolation(ctx) {
     const hasSelection = ctx.selectedParts.size > 0;
     ctx.parts.forEach((p, i) => {
-      if (!hasSelection || ctx.selectedParts.has(i)) {
-        ctx.api.show(p.instanceID);
-      } else {
-        ctx.api.hide(p.instanceID);
-      }
+      if (!hasSelection || ctx.selectedParts.has(i)) ctx.api.show(p.instanceID);
+      else ctx.api.hide(p.instanceID);
     });
     Bus.emit('engine:isolation-updated', ctx);
   }
@@ -679,7 +674,7 @@ const StudioUI = {
     await this.engine.captureBaseline(slider.value);
     slider.value = target;
     document.getElementById('explode-percent').textContent = Math.round(target) + '%';
-    this.engine.explode(target, true, 0.55, 'easeOutCubic');
+    this.engine.explode(target, true, 0.70);
   },
 
   bindBus() {
@@ -692,9 +687,7 @@ const StudioUI = {
       document.getElementById('loading-overlay').classList.remove('opacity-0', 'pointer-events-none');
     });
 
-    Bus.on('engine:isolation-updated', (ctx) => {
-      this.renderSubpartList(ctx);
-    });
+    Bus.on('engine:isolation-updated', (ctx) => this.renderSubpartList(ctx));
 
     Bus.on('engine:ready', (ctx) => {
       document.getElementById('loading-overlay').classList.add('opacity-0', 'pointer-events-none');
@@ -742,7 +735,7 @@ const StudioUI = {
       if (act === 'explode-mode') {
         this.setExplodeModeUI(btn.dataset.mode);
         const curVal = parseFloat(document.getElementById('explode-slider').value) || 0;
-        if (curVal > 0) this.engine.explode(curVal, true, 0.50, 'easeOutCubic');
+        if (curVal > 0) this.engine.explode(curVal, true, 0.65);
       }
 
       if (act === 'explode-to') this.runExplodeTo(parseFloat(btn.dataset.val));
@@ -757,33 +750,28 @@ const StudioUI = {
         }
       }
 
-      if (act === 'isolate-part') {
-        this.engine.toggleIsolatePart(parseInt(btn.dataset.idx, 10));
-      }
-
-      if (act === 'show-all-parts') {
-        this.engine.showAllParts();
-      }
+      if (act === 'isolate-part') this.engine.toggleIsolatePart(parseInt(btn.dataset.idx, 10));
+      if (act === 'show-all-parts') this.engine.showAllParts();
     });
 
-    // 🎯 零顿挫丝滑爆炸滑块：拖动中用 55ms 节流 + easeLinear 匀速追踪，松手用 easeOutCubic 缓停
+    // 🎯 零顿挫丝滑交互：拖动期间 duration=0 瞬时同步且不抢镜头，松手后相机柔和补位缩放
     const expSlider = document.getElementById('explode-slider');
-    let throttleTimer = null;
+    let rafPending = false;
 
     expSlider.addEventListener('pointerdown', () => this.engine.captureBaseline(expSlider.value));
     expSlider.addEventListener('input', (e) => {
       const val = parseFloat(e.target.value) || 0;
       document.getElementById('explode-percent').textContent = Math.round(val) + '%';
       AnimeGridStage.setExplodeProgress(val / 100);
-      if (throttleTimer) return;
-      throttleTimer = setTimeout(() => {
-        throttleTimer = null;
-        this.engine.explode(expSlider.value, true, 0.07, 'easeLinear');
-      }, 55);
+      if (rafPending) return;
+      rafPending = true;
+      requestAnimationFrame(() => {
+        rafPending = false;
+        this.engine.explode(expSlider.value, false, 0);
+      });
     });
     expSlider.addEventListener('change', (e) => {
-      if (throttleTimer) { clearTimeout(throttleTimer); throttleTimer = null; }
-      this.engine.explode(e.target.value, true, 0.45, 'easeOutCubic');
+      this.engine.explode(e.target.value, true, 0.50);
     });
 
     document.getElementById('light-slider').addEventListener('input', (e) => {
