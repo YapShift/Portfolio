@@ -14,8 +14,7 @@
 
     :root {
       --accent: #f5792a;
-      --accent-cyan: #38bdf8;
-      --bg-dark: #05070c;
+      --bg-obsidian: #08090c;
     }
 
     * { box-sizing: border-box; }
@@ -24,65 +23,43 @@
       width: 100vw;
       height: 100vh;
       overflow: hidden;
-      background-color: var(--bg-dark);
+      background-color: var(--bg-obsidian);
+      background-image: radial-gradient(circle at 50% 48%, #141720 0%, #090a0e 60%, #050608 100%);
       font-family: 'JetBrains Mono', monospace;
-      color: #e2e8f0;
+      color: #e4e4e7;
       user-select: none;
     }
     .font-header { font-family: 'Chakra Petch', sans-serif; }
 
-    /* 细腻的工程蓝图背景网格 */
-    .blueprint-grid {
-      background-image:
-        radial-gradient(circle at 50% 45%, rgba(28, 36, 52, 0.55) 0%, rgba(5, 7, 12, 0.96) 72%),
-        linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255, 255, 255, 0.025) 1px, transparent 1px);
-      background-size: 100% 100%, 44px 44px, 44px 44px;
-    }
-
-    @keyframes floatAurora {
-      0%, 100% { transform: translate(0px, 0px) scale(1); }
-      50% { transform: translate(30px, -22px) scale(1.08); }
-    }
-    .aurora-orb {
-      position: fixed;
-      border-radius: 9999px;
-      filter: blur(110px);
-      pointer-events: none;
-      animation: floatAurora 14s infinite ease-in-out;
-    }
-
-    /* 悬浮毛玻璃 + 鼠标追光边框卡片（无歪斜，点击稳如磐石） */
-    .studio-glass {
-      background: rgba(10, 14, 23, 0.78);
-      backdrop-filter: blur(16px);
-      -webkit-backdrop-filter: blur(16px);
-      border: 1px solid rgba(255, 255, 255, 0.09);
-      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+    /* 高性能暗透玻璃面板（去掉重度 WebGL backdrop-filter，保证 60FPS 零掉帧） */
+    .studio-panel {
+      background: rgba(12, 14, 19, 0.90);
+      border: 1px solid rgba(255, 255, 255, 0.085);
+      box-shadow: 0 14px 36px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.04);
     }
 
     .spotlight-card {
       position: relative;
       overflow: hidden;
-      background: rgba(15, 21, 34, 0.72);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      transition: border-color 0.22s ease, background 0.22s ease, transform 0.2s ease;
+      background: rgba(18, 21, 29, 0.78);
+      border: 1px solid rgba(255, 255, 255, 0.075);
+      transition: border-color 0.2s ease, background 0.2s ease;
     }
     .spotlight-card::before {
       content: '';
       position: absolute;
       inset: 0;
-      background: radial-gradient(240px circle at var(--mouse-x, -500px) var(--mouse-y, -500px), rgba(245, 121, 42, 0.18), transparent 70%);
+      background: radial-gradient(220px circle at var(--mouse-x, -500px) var(--mouse-y, -500px), rgba(245, 121, 42, 0.16), transparent 70%);
       pointer-events: none;
       z-index: 1;
     }
     .spotlight-card:hover {
-      border-color: rgba(245, 121, 42, 0.5);
+      border-color: rgba(245, 121, 42, 0.48);
     }
     .spotlight-card.active {
       border-color: var(--accent);
-      background: linear-gradient(135deg, rgba(245, 121, 42, 0.20) 0%, rgba(15, 21, 34, 0.92) 100%);
-      box-shadow: inset 3px 0 0 var(--accent), 0 8px 24px -6px rgba(245, 121, 42, 0.35);
+      background: linear-gradient(135deg, rgba(245, 121, 42, 0.18) 0%, rgba(18, 21, 29, 0.94) 100%);
+      box-shadow: inset 3px 0 0 var(--accent);
     }
 
     /* 序幕流光 CTA 按钮 */
@@ -108,31 +85,31 @@
     }
     .uiverse-cta:hover {
       transform: scale(1.04);
-      box-shadow: 0 0 38px rgba(245, 121, 42, 0.5);
+      box-shadow: 0 0 36px rgba(245, 121, 42, 0.48);
     }
     .uiverse-cta-inner {
       position: relative;
       z-index: 2;
-      background: #080c14;
+      background: #0a0c11;
       border-radius: 9999px;
     }
 
-    /* 精致 HUD 四角取景框 */
+    /* 四角精密坐标取景框 */
     .hud-bracket {
       position: fixed;
-      width: 20px;
-      height: 20px;
-      border-color: rgba(245, 121, 42, 0.45);
+      width: 18px;
+      height: 18px;
+      border-color: rgba(245, 121, 42, 0.42);
       pointer-events: none;
       z-index: 15;
     }
 
-    /* 工业风菱形滑块 */
+    /* 工业风滑块 */
     input[type="range"].studio-slider {
       -webkit-appearance: none;
       appearance: none;
       height: 4px;
-      background: linear-gradient(90deg, rgba(245,121,42,0.65), rgba(56,189,248,0.65));
+      background: linear-gradient(90deg, rgba(245,121,42,0.75), rgba(56,189,248,0.65));
       border-radius: 999px;
       outline: none;
     }
@@ -146,7 +123,7 @@
       border: 2px solid #fff;
       cursor: pointer;
       transform: rotate(45deg);
-      box-shadow: 0 0 10px rgba(245, 121, 42, 0.8);
+      box-shadow: 0 0 8px rgba(245, 121, 42, 0.75);
     }
     input[type="range"].studio-slider:disabled { opacity: 0.28; cursor: not-allowed; }
 
@@ -160,44 +137,41 @@
     ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.16); border-radius: 4px; }
   </style>
 </head>
-<body class="blueprint-grid relative">
+<body class="relative">
 
-  <!-- 环境极光氛围光晕（柔和克制，不抢模型） -->
-  <div class="aurora-orb w-[460px] h-[460px] bg-orange-500/12 top-[-12%] left-[12%] z-0"></div>
-  <div class="aurora-orb w-[460px] h-[460px] bg-sky-500/12 bottom-[-14%] right-[10%] z-0" style="animation-delay: -6s;"></div>
+  <!-- ✨ Anime.js 风格：精密点阵 + 十字标 + 联动呼吸刻度环背景画布 -->
+  <canvas id="anime-bg-canvas" class="fixed inset-0 w-full h-full pointer-events-none z-0"></canvas>
 
   <!-- 100% 全屏多模型并行预加载缓存视口池 -->
   <div id="sketchfab-viewport-pool" class="fixed inset-0 w-full h-full z-10"></div>
 
-  <!-- 精致四角 HUD 工业取景框 -->
+  <!-- 精致四角 HUD 坐标框 -->
   <div class="hud-bracket top-3 left-3 border-t-2 border-l-2"></div>
   <div class="hud-bracket top-3 right-3 border-t-2 border-r-2"></div>
   <div class="hud-bracket bottom-3 left-3 border-b-2 border-l-2"></div>
   <div class="hud-bracket bottom-3 right-3 border-b-2 border-r-2"></div>
 
   <!-- =========================================================
-       STAGE 01: 影院级 Showreel 序幕铺垫层（后台同步并行预加载 3D 资产）
+       STAGE 01: Showreel 序幕铺垫层（透明透出下方 Anime.js 动态精密点阵）
        ========================================================= -->
-  <div id="hero-overlay" class="fixed inset-0 z-50 flex flex-col justify-between p-8 bg-[#05070c]/82 backdrop-blur-lg transition-all duration-500">
+  <div id="hero-overlay" class="fixed inset-0 z-50 flex flex-col justify-between p-8 bg-[#08090c]/75 transition-all duration-500">
     <div id="hero-spotlight" class="pointer-events-none fixed inset-0 z-0"></div>
 
-    <!-- 序幕顶栏 -->
     <div class="relative z-10 flex items-center justify-between border-b border-white/10 pb-4">
       <div class="flex items-center gap-3">
         <div class="w-3 h-3 bg-[#f5792a] rotate-45 shadow-[0_0_12px_#f5792a]"></div>
         <span class="font-header font-bold tracking-widest text-sm text-white">YAPSHIFT // 3D TECHNICAL PORTFOLIO</span>
         <span class="text-[10px] px-2 py-0.5 rounded bg-orange-500/15 text-orange-300 border border-orange-500/30">ORIGINAL ASSETS</span>
       </div>
-      <div class="flex items-center gap-4 text-[11px] text-slate-300">
+      <div class="flex items-center gap-4 text-[11px] text-zinc-300">
         <span id="hero-preload-status" class="flex items-center gap-2 text-sky-300">
           <span class="w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping"></span>
           <span>后台并行预载 3D 资产中 (0/2)...</span>
         </span>
-        <a href="https://yapshift.github.io/Portfolio/" target="_blank" class="text-slate-400 hover:text-white transition">GitHub ↗</a>
+        <a href="https://yapshift.github.io/Portfolio/" target="_blank" class="text-zinc-400 hover:text-white transition">GitHub ↗</a>
       </div>
     </div>
 
-    <!-- 序幕核心视觉铺垫 -->
     <div class="relative z-10 max-w-4xl mx-auto text-center space-y-6 my-auto">
       <div class="inline-flex items-center gap-2 px-4 py-1 rounded-full bg-white/5 border border-white/15 text-[11px] text-orange-300">
         <span class="w-2 h-2 rounded-full bg-orange-400 animate-pulse"></span>
@@ -205,19 +179,18 @@
       </div>
 
       <h1 class="font-header text-5xl md:text-7xl font-bold tracking-tight leading-none">
-        <span class="text-transparent bg-clip-text bg-gradient-to-r from-white via-orange-200 to-orange-500 drop-shadow-[0_0_28px_rgba(245,121,42,0.35)]">YAPSHIFT</span>
-        <span class="block text-lg md:text-2xl font-medium text-slate-300 mt-3 tracking-[0.22em] uppercase">
+        <span class="text-transparent bg-clip-text bg-gradient-to-r from-white via-orange-200 to-orange-500 drop-shadow-[0_0_28px_rgba(245,121,42,0.32)]">YAPSHIFT</span>
+        <span class="block text-lg md:text-2xl font-medium text-zinc-300 mt-3 tracking-[0.22em] uppercase">
           3D Asset &amp; Assembly Workbench
         </span>
       </h1>
 
-      <p class="max-w-2xl mx-auto text-xs md:text-sm text-slate-300 leading-relaxed">
+      <p class="max-w-2xl mx-auto text-xs md:text-sm text-zinc-300 leading-relaxed">
         精选两件原创核心作品：<b class="text-orange-300">机械悬挂系统总成 (Suspention)</b> 与
         <b class="text-sky-300">风格化岩石 5 级 LOD 对比 (Stylized Rock)</b>。
-        支持六向正交立体拆解、工程线性排布、实时拓扑线框与 X-Ray 内腔透视。
+        支持六向正交立体拆解、工程一字线性排布、实时拓扑线框与 X-Ray 内腔透视。
       </p>
 
-      <!-- 三大亮点 Bento 卡片 -->
       <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 text-left">
         <div class="spotlight-card rounded-2xl p-4 space-y-1.5">
           <div class="flex items-center justify-between text-[10px] text-orange-400">
@@ -225,7 +198,7 @@
             <span>MULTI-PART</span>
           </div>
           <div class="text-sm font-bold text-white font-header">精密机械悬挂总成</div>
-          <div class="text-[11px] text-slate-400 leading-relaxed">避震弹簧、摆臂与轴承座精密配合，支持六向正交与工程一字排布拆解。</div>
+          <div class="text-[11px] text-zinc-400 leading-relaxed">避震弹簧、摆臂与轴承座精密配合，支持六向正交与工程一字排布拆解。</div>
         </div>
 
         <div class="spotlight-card rounded-2xl p-4 space-y-1.5">
@@ -234,7 +207,7 @@
             <span>5-LEVEL LOD</span>
           </div>
           <div class="text-sm font-bold text-white font-header">5 级 LOD 减面管线</div>
-          <div class="text-[11px] text-slate-400 leading-relaxed">同屏对比 LOD0–LOD4 五阶面数变化，极低面数下保持完整剪影与法线。</div>
+          <div class="text-[11px] text-zinc-400 leading-relaxed">同屏对比 LOD0–LOD4 五阶面数变化，极低面数下保持完整剪影与法线。</div>
         </div>
 
         <div class="spotlight-card rounded-2xl p-4 space-y-1.5">
@@ -243,13 +216,12 @@
             <span>ZERO-WAIT</span>
           </div>
           <div class="text-sm font-bold text-white font-header">并行预载与材质诊断</div>
-          <div class="text-[11px] text-slate-400 leading-relaxed">多实例后台并行缓存秒切，随时切换 PBR / 雕塑灰模 / 拓扑线框 / X-Ray。</div>
+          <div class="text-[11px] text-zinc-400 leading-relaxed">多实例后台并行缓存秒切，随时切换 PBR / 雕塑灰模 / 拓扑线框 / X-Ray。</div>
         </div>
       </div>
 
-      <!-- 炫酷流光进入按钮 -->
       <div class="pt-3 flex flex-col items-center">
-        <button id="hero-enter-btn" data-action="close-hero" class="uiverse-cta">
+        <button data-action="close-hero" class="uiverse-cta">
           <div class="uiverse-cta-inner px-8 py-3.5 flex items-center gap-3 text-sm font-bold font-header tracking-wider text-white">
             <span class="w-2.5 h-2.5 rounded-full bg-orange-500 animate-ping"></span>
             <span>LAUNCH 3D WORKBENCH // 进入 3D 检视工作站</span>
@@ -259,9 +231,8 @@
       </div>
     </div>
 
-    <!-- 序幕底栏 -->
-    <div class="relative z-10 border-t border-white/10 pt-4 flex items-center justify-between text-[11px] text-slate-500">
-      <div>ALL 3D ASSETS CREATED BY <b class="text-slate-200">YAPSHIFT</b></div>
+    <div class="relative z-10 border-t border-white/10 pt-4 flex items-center justify-between text-[11px] text-zinc-500">
+      <div>ALL 3D ASSETS CREATED BY <b class="text-zinc-200">YAPSHIFT</b></div>
       <div class="flex items-center gap-5">
         <span>✦ SUSPENTION ASSEMBLY</span>
         <span>✦ STYLIZED ROCK 5-LOD</span>
@@ -270,32 +241,30 @@
   </div>
 
   <!-- =========================================================
-       STAGE 02: 全屏工业科幻 3D 展厅（悬浮毛玻璃 HUD，绝不挤压视口）
+       STAGE 02: 全屏工业科幻 3D 展厅
        ========================================================= -->
-
-  <!-- 极简加载遮罩（仅首次未完成时显示） -->
-  <div id="loading-overlay" class="fixed inset-0 z-15 bg-[#05070c]/70 backdrop-blur-sm flex flex-col items-center justify-center gap-3 transition-opacity duration-300 opacity-0 pointer-events-none">
+  <div id="loading-overlay" class="fixed inset-0 z-15 bg-[#08090c]/80 flex flex-col items-center justify-center gap-3 transition-opacity duration-300 opacity-0 pointer-events-none">
     <div class="w-9 h-9 border-2 border-[#f5792a] border-t-transparent rounded-full animate-spin"></div>
     <div class="text-xs tracking-widest text-orange-300">INITIALIZING WEBGL ASSET...</div>
   </div>
 
   <!-- 左上角：品牌徽章 + 悬浮作品切换 -->
   <aside class="fixed top-6 left-6 z-20 w-64 flex flex-col gap-2.5">
-    <div class="studio-glass rounded-xl px-4 py-3 flex items-center justify-between">
+    <div class="studio-panel rounded-xl px-4 py-3 flex items-center justify-between">
       <div class="flex items-center gap-2.5">
         <div class="w-2.5 h-2.5 bg-[#f5792a] rotate-45 shadow-[0_0_10px_#f5792a]"></div>
         <div>
           <div class="font-header text-sm font-bold tracking-wider text-white leading-none">YAPSHIFT</div>
-          <div class="text-[9px] text-slate-400 mt-0.5 tracking-widest">3D WORKBENCH</div>
+          <div class="text-[9px] text-zinc-400 mt-0.5 tracking-widest">3D WORKBENCH</div>
         </div>
       </div>
-      <button data-action="open-hero" class="text-[10px] px-2 py-0.5 rounded bg-white/5 hover:bg-white/15 text-slate-300 border border-white/10 transition" title="返回序幕">
+      <button data-action="open-hero" class="text-[10px] px-2 py-0.5 rounded bg-white/5 hover:bg-white/15 text-zinc-300 border border-white/10 transition">
         🎬 序幕
       </button>
     </div>
 
-    <div class="studio-glass rounded-xl p-2.5 flex flex-col gap-2">
-      <div class="px-1 flex items-center justify-between text-[10px] font-header font-bold text-slate-300 uppercase tracking-wider">
+    <div class="studio-panel rounded-xl p-2.5 flex flex-col gap-2">
+      <div class="px-1 flex items-center justify-between text-[10px] font-header font-bold text-zinc-300 uppercase tracking-wider">
         <span>Portfolio Assets</span>
         <span id="gallery-count" class="text-orange-400 font-mono">2 ASSETS</span>
       </div>
@@ -303,74 +272,71 @@
     </div>
   </aside>
 
-  <!-- 右上角：悬浮工具栏 -->
+  <!-- 右上角：悬浮工具栏（真正的 360° 相机转台 + 独立 HDRI 光影 + 复位/截图/面板） -->
   <div class="fixed top-6 right-6 z-20 flex items-center gap-2">
-    <div class="studio-glass rounded-xl px-3 py-1.5 flex items-center gap-2.5 text-[11px]">
-      <button id="btn-orbit" data-action="toggle-orbit" class="flex items-center gap-1.5 text-emerald-400 hover:text-emerald-300 transition">
+    <div class="studio-panel rounded-xl px-3 py-1.5 flex items-center gap-2.5 text-[11px]">
+      <button id="btn-orbit" data-action="toggle-orbit" class="flex items-center gap-1.5 text-emerald-400 hover:text-emerald-300 transition" title="360° 轨道转台开关">
         <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span>
         <span>转台: ON</span>
       </button>
       <div class="w-[1px] h-3.5 bg-white/10"></div>
-      <span class="text-sky-400">☀️</span>
+      <span class="text-sky-400" title="独立旋转 HDRI 环境光">☀️</span>
       <input id="light-slider" type="range" min="0" max="360" value="0" class="studio-slider w-16 cursor-pointer" title="HDRI 光影旋转" />
       <span id="light-deg" class="text-sky-300 w-7 text-right">0°</span>
     </div>
 
-    <div class="studio-glass rounded-xl p-1 flex items-center gap-1 text-[11px]">
-      <button data-action="recenter" class="px-2.5 py-1 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition" title="重置相机视角">⟳ 复位</button>
+    <div class="studio-panel rounded-xl p-1 flex items-center gap-1 text-[11px]">
+      <button data-action="recenter" class="px-2.5 py-1 rounded-lg text-zinc-300 hover:text-white hover:bg-white/10 transition" title="重置相机视角">⟳ 复位</button>
       <button data-action="screenshot" class="px-2.5 py-1 rounded-lg text-sky-300 hover:bg-sky-500/20 transition" title="导出 1080p 截图">📸 截图</button>
       <button id="btn-toggle-drawer" data-action="toggle-drawer" class="px-2.5 py-1 rounded-lg bg-orange-500/20 border border-orange-500/40 text-orange-200 transition">🧩 检视面板</button>
     </div>
   </div>
 
   <!-- 顶部居中轻提示 -->
-  <div id="cam-toast" class="fixed top-6 left-1/2 -translate-x-1/2 z-20 studio-glass rounded-full px-4 py-1 text-[11px] text-sky-200 border border-sky-400/30 opacity-0 pointer-events-none transition-opacity duration-300">
+  <div id="cam-toast" class="fixed top-6 left-1/2 -translate-x-1/2 z-20 studio-panel rounded-full px-4 py-1 text-[11px] text-sky-200 border border-sky-400/30 opacity-0 pointer-events-none transition-opacity duration-300">
     🎥 镜头已随拆解同步缩放（中心锁定）
   </div>
 
-  <!-- 右侧悬浮检视面板（默认优雅展开，保留点击步骤触发 3D 检视的叙事感，可一键收起） -->
-  <aside id="drawer-panel" class="fixed top-20 right-6 bottom-24 z-20 w-[340px] studio-glass rounded-2xl p-4 flex flex-col gap-3.5 overflow-y-auto transition-all duration-300">
+  <!-- 右侧悬浮检视面板 -->
+  <aside id="drawer-panel" class="fixed top-20 right-6 bottom-24 z-20 w-[340px] studio-panel rounded-2xl p-4 flex flex-col gap-3.5 overflow-y-auto transition-all duration-300">
     <div>
       <div id="spec-category" class="text-[10px] text-orange-400 font-bold uppercase tracking-wider"></div>
       <h2 id="spec-title" class="font-header text-lg font-bold text-white mt-0.5 leading-snug"></h2>
-      <p id="spec-desc" class="text-[11px] text-slate-400 mt-1 leading-relaxed"></p>
+      <p id="spec-desc" class="text-[11px] text-zinc-400 mt-1 leading-relaxed"></p>
       <div id="spec-tags" class="flex flex-wrap gap-1.5 mt-2"></div>
     </div>
 
-    <!-- 真实几何遥测数据 -->
     <div class="grid grid-cols-3 gap-2 text-center">
       <div class="spotlight-card rounded-xl py-2 px-1">
-        <div class="text-[9px] text-slate-400">真实三角面</div>
+        <div class="text-[9px] text-zinc-400">真实三角面</div>
         <div id="spec-polys" class="text-xs font-bold text-white mt-0.5">--</div>
       </div>
       <div class="spotlight-card rounded-xl py-2 px-1">
-        <div class="text-[9px] text-slate-400">真实顶点数</div>
+        <div class="text-[9px] text-zinc-400">真实顶点数</div>
         <div id="spec-verts" class="text-xs font-bold text-white mt-0.5">--</div>
       </div>
       <div class="spotlight-card rounded-xl py-2 px-1">
-        <div class="text-[9px] text-slate-400">可拆子部件</div>
+        <div class="text-[9px] text-zinc-400">可拆子部件</div>
         <div id="spec-parts" class="text-xs font-bold text-emerald-400 mt-0.5">--</div>
       </div>
     </div>
 
-    <!-- 点击步骤一键触发 3D 检视（找回叙事互动铺垫！） -->
     <div class="space-y-1.5">
-      <div class="text-[10px] font-header font-bold text-slate-300 uppercase tracking-wider">🎯 互动检视脚本 (CLICK TO DEMO)</div>
+      <div class="text-[10px] font-header font-bold text-zinc-300 uppercase tracking-wider">🎯 互动检视脚本 (CLICK TO DEMO)</div>
       <div id="workflow-list" class="space-y-1.5"></div>
     </div>
 
-    <!-- 子部件独立诊断 -->
     <div class="flex-1 flex flex-col min-h-[110px]">
       <div class="flex items-center justify-between text-[10px] font-header font-bold text-sky-300 uppercase mb-1.5">
         <span>🌳 子部件独立诊断</span>
-        <span id="spec-strategy" class="text-[9px] font-mono text-slate-400"></span>
+        <span id="spec-strategy" class="text-[9px] font-mono text-zinc-400"></span>
       </div>
       <div id="subpart-list" class="flex-1 overflow-y-auto space-y-1 pr-1 text-[10px]"></div>
     </div>
   </aside>
 
-  <!-- 底部居中：工业科幻悬浮控制胶囊 Dock -->
-  <footer class="fixed bottom-6 left-1/2 -translate-x-1/2 z-20 studio-glass rounded-2xl px-4 py-2.5 flex items-center gap-4 max-w-[95vw] overflow-x-auto">
+  <!-- 底部居中悬浮控制胶囊 Dock -->
+  <footer class="fixed bottom-6 left-1/2 -translate-x-1/2 z-20 studio-panel rounded-2xl px-4 py-2.5 flex items-center gap-4 max-w-[95vw] overflow-x-auto">
     <div id="shader-toolbar" class="flex items-center gap-1 text-[11px] font-header font-semibold shrink-0"></div>
 
     <div class="w-[1px] h-5 bg-white/15 shrink-0"></div>
@@ -378,20 +344,20 @@
     <div id="dock-explode-group" class="flex items-center gap-2.5 shrink-0">
       <div class="flex items-center bg-black/50 p-0.5 rounded-lg border border-white/10 text-[10px]">
         <button id="btn-mode-cardinal" data-action="explode-mode" data-mode="cardinal" class="px-2.5 py-1 rounded-md bg-orange-500/30 text-orange-200 font-bold transition">立体拆解</button>
-        <button id="btn-mode-linear" data-action="explode-mode" data-mode="linear" class="px-2.5 py-1 rounded-md text-slate-400 hover:text-white transition">线性排布</button>
+        <button id="btn-mode-linear" data-action="explode-mode" data-mode="linear" class="px-2.5 py-1 rounded-md text-zinc-400 hover:text-white transition">线性排布</button>
       </div>
 
       <input id="explode-slider" type="range" min="0" max="100" value="0" class="studio-slider w-36 cursor-pointer" />
       <span id="explode-percent" class="text-xs font-bold text-orange-400 w-9 text-right">0%</span>
 
       <div class="flex items-center gap-1 text-[10px]">
-        <button data-action="explode-to" data-val="0" class="px-2 py-1 rounded-md bg-white/5 hover:bg-white/15 text-slate-300 transition">0%</button>
+        <button data-action="explode-to" data-val="0" class="px-2 py-1 rounded-md bg-white/5 hover:bg-white/15 text-zinc-300 transition">0%</button>
         <button data-action="explode-to" data-val="65" class="px-2 py-1 rounded-md bg-orange-500/20 hover:bg-orange-500/35 text-orange-200 transition">65%</button>
       </div>
     </div>
   </footer>
 
-  <!-- 自动时间戳防缓存加载器 -->
+  <!-- 自动时间戳防缓存按序加载器 -->
   <script>
     (function loadFreshScripts() {
       const bust = Date.now();
