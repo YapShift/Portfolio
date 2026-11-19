@@ -875,10 +875,30 @@ window.StudioUI = {
     const expSlider = document.getElementById('explode-slider');
     expSlider.addEventListener('pointerdown', () => this.engine.captureBaseline(expSlider.value));
     expSlider.addEventListener('mousedown', () => this.engine.captureBaseline(expSlider.value));
+    let targetExpVal = 0;
+    let currentExpVal = 0;
+    let expRafId = null;
+
+    const runSmoothExplodeLoop = () => {
+      const diff = targetExpVal - currentExpVal;
+      if (Math.abs(diff) < 0.08) {
+        currentExpVal = targetExpVal;
+        this.engine.explode(currentExpVal, true, 0.08);
+        expRafId = null;
+        return;
+      }
+      // 阻尼系数 0.10：数值越小过渡越慢越优雅（推荐 0.08 ~ 0.14）
+      currentExpVal += diff * 0.10;
+      this.engine.explode(currentExpVal, true, 0.08);
+      expRafId = requestAnimationFrame(runSmoothExplodeLoop);
+    };
+
     expSlider.addEventListener('input', (e) => {
-      document.getElementById('explode-percent').textContent = Math.round(e.target.value) + '%';
-      this.engine.explode(e.target.value, true, 0.04);
+      targetExpVal = parseFloat(e.target.value) || 0;
+      document.getElementById('explode-percent').textContent = Math.round(targetExpVal) + '%';
+      if (!expRafId) expRafId = requestAnimationFrame(runSmoothExplodeLoop);
     });
+
     document.getElementById('light-rot-slider').addEventListener('input', (e) => {
       document.getElementById('light-rot-deg').textContent = e.target.value + '°';
       this.engine.rotateLight(e.target.value);
