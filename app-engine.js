@@ -1,6 +1,6 @@
 /**
- * YapShift 3D Studio Engine (app-engine.js v18.0)
- * 极简专业版：无冗余特效，专注 3D 模型并行预载秒切、立体/线性双模式丝滑爆炸、材质检视与子件诊断。
+ * YapShift 3D Workbench Engine (app-engine.js v19.0)
+ * 兼顾影院级 Showreel 铺垫氛围 + 后台多实例并行预载秒切 + 全百分比 GPU 丝滑双模式拆解。
  */
 
 const STUDIO_ASSETS = [
@@ -10,26 +10,36 @@ const STUDIO_ASSETS = [
     sub: 'Suspention Assembly',
     category: 'MECHANICAL // HARD-SURFACE',
     uid: '08632550c5604444a14b53dc339b6589',
-    desc: '精密避震弹簧、上下控制臂与轴承座机械装配体，支持立体正交拆解、工程线性排布与 X-Ray 内腔透视。',
-    tags: ['Hard-Surface', 'Multi-Part Assembly', 'PBR Metal']
+    desc: '精密避震弹簧、上下控制臂与轴承座装配总成，支持立体正交拆解、工程线性排布与 X-Ray 内腔透视。',
+    tags: ['✦ Hard-Surface', '✦ 精密装配', '✦ PBR Metal'],
+    workflow: [
+      { step: 'STEP 01', title: '六向正交立体拆解', tag: '炸开 65%', action: 'explode65', desc: '沿上下左右前后正交朝外紧凑推开，展示三维装配层次。' },
+      { step: 'STEP 02', title: '工程一字线性排布', tag: '线性队列', action: 'linear65', desc: '将全部零件沿水平主轴整齐排开，像维修手册一样检视全件。' },
+      { step: 'STEP 03', title: 'X-Ray 幽灵内腔透视', tag: '开启透视', action: 'xray', desc: '切换 28% 半透明态，直视内部活塞杆与轴套配合关系。' }
+    ]
   },
   {
     id: 'yapshift-stylized-rock-lod',
     title: '风格化岩石 5 级 LOD',
     sub: 'Stylized Rock (5 Versions)',
-    category: 'GAME ASSET // 5-LEVEL LOD',
+    category: 'GAME OPTIMIZATION // 5-LEVEL LOD',
     uid: 'f9963591aa36459b9837b7a9ca411438',
-    desc: '同屏展示从高精到极简远景的 5 级阶梯减面（LOD0–LOD4），极低面数下完整保持高模法线与剪影。',
-    tags: ['5-Level LOD', 'Normal Bake', 'Stylized PBR']
+    desc: '同屏展示从高精到极简远景的 5 级阶梯减面（LOD0–LOD4），极低面数下完整保留高模剪影与法线细节。',
+    tags: ['✦ 5-Level LOD', '✦ 法线烘焙', '✦ 风格化手绘'],
+    workflow: [
+      { step: 'STEP 01', title: '5 级 LOD 网格密度对比', tag: '拓扑线框', action: 'wire', desc: '叠加高亮橙色线框，直观对比从高模到极简远景的减面功底。' },
+      { step: 'STEP 02', title: '雕塑灰模法线检视', tag: '切换灰模', action: 'clay', desc: '屏蔽颜色贴图，纯光影检验 5 级 LOD 轮廓与法线保持度。' },
+      { step: 'STEP 03', title: '无光影 Albedo 纯色检视', tag: '纯色贴图', action: 'albedo', desc: '剥离光影，纯粹检视岩石边缘磨损与冷暖手绘色彩。' }
+    ]
   }
 ];
 
 const STUDIO_SHADERS = [
-  { id: 'rendered', label: 'PBR' },
-  { id: 'clay',     label: '灰模' },
-  { id: 'wire',     label: '线框' },
-  { id: 'xray',     label: 'X-Ray' },
-  { id: 'albedo',   label: '纯色' }
+  { id: 'rendered', label: '✦ 完整PBR' },
+  { id: 'clay',     label: '◐ 雕塑灰模' },
+  { id: 'wire',     label: '⌗ 拓扑线框' },
+  { id: 'xray',     label: '❖ X-Ray' },
+  { id: 'albedo',   label: '▣ 纯色贴图' }
 ];
 
 window.Bus = {
@@ -43,7 +53,7 @@ class SketchfabPoolEngine {
     this.poolContainer = document.getElementById('sketchfab-viewport-pool');
     this.instances = new Map();
     this.activeAssetId = null;
-    this.mode = 'cardinal'; // 'cardinal' (立体拆解) | 'linear' (线性排布)
+    this.mode = 'cardinal';
     this.autoOrbitEnabled = true;
     this.orbitTimer = null;
     this.toastTimer = null;
@@ -65,6 +75,12 @@ class SketchfabPoolEngine {
 
   preloadAll(assets) {
     assets.forEach(asset => this.ensureInstance(asset));
+  }
+
+  getReadyCount() {
+    let n = 0;
+    this.instances.forEach(ctx => { if (ctx.ready) n++; });
+    return n;
   }
 
   syncCameraBaseline(ctx) {
@@ -89,7 +105,7 @@ class SketchfabPoolEngine {
 
     const iframe = document.createElement('iframe');
     iframe.id = `sf-frame-${asset.id}`;
-    iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;opacity:0;pointer-events:none;z-index:1;transition:opacity 0.2s ease;';
+    iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;opacity:0;pointer-events:none;z-index:1;transition:opacity 0.22s ease;';
     iframe.setAttribute('allow', 'autoplay; fullscreen; xr-spatial-tracking');
     iframe.setAttribute('allowfullscreen', '');
     if (this.poolContainer) this.poolContainer.appendChild(iframe);
@@ -171,11 +187,8 @@ class SketchfabPoolEngine {
       ctx.iframe.style.zIndex = active ? '10' : '1';
     });
 
-    if (targetCtx.ready) {
-      Bus.emit('engine:ready', targetCtx);
-    } else {
-      Bus.emit('engine:loading');
-    }
+    if (targetCtx.ready) Bus.emit('engine:ready', targetCtx);
+    else Bus.emit('engine:loading');
   }
 
   startOrbitLoop() {
@@ -239,7 +252,6 @@ class SketchfabPoolEngine {
     });
 
     if (adjustCam && ctx.baselineCam) {
-      // 线性排布跨度更宽，相机同步拉远更多（1.55x），立体拆解温和拉远（1.35x）
       const z = 1 + factor * (this.mode === 'linear' ? 0.55 : 0.35);
       const t = ctx.baselineCam.target;
       const v = ctx.baselineCam.baseVec;
@@ -327,10 +339,11 @@ class SketchfabPoolEngine {
 const StudioUI = {
   engine: null,
   currentAssetId: null,
-  drawerOpen: false,
+  drawerOpen: true,
 
   init() {
     this.engine = new SketchfabPoolEngine();
+    this.initSpotlight();
     this.renderShaderBar();
     this.bindEvents();
     this.bindBus();
@@ -338,9 +351,52 @@ const StudioUI = {
     this.selectAsset(STUDIO_ASSETS[0].id);
   },
 
+  initSpotlight() {
+    document.addEventListener('mousemove', (e) => {
+      const heroSpot = document.getElementById('hero-spotlight');
+      if (heroSpot) {
+        heroSpot.style.background = `radial-gradient(650px circle at ${e.clientX}px ${e.clientY}px, rgba(245, 121, 42, 0.14), transparent 70%)`;
+      }
+      document.querySelectorAll('.spotlight-card').forEach(card => {
+        const rect = card.getBoundingClientRect();
+        card.style.setProperty('--mouse-x', `${e.clientX - rect.left}px`);
+        card.style.setProperty('--mouse-y', `${e.clientY - rect.top}px`);
+      });
+    });
+  },
+
+  closeHero() {
+    const overlay = document.getElementById('hero-overlay');
+    if (!overlay) return;
+    overlay.classList.add('opacity-0', 'pointer-events-none', 'scale-105');
+    setTimeout(() => overlay.classList.add('hidden'), 480);
+  },
+
+  openHero() {
+    const overlay = document.getElementById('hero-overlay');
+    if (!overlay) return;
+    overlay.classList.remove('hidden');
+    requestAnimationFrame(() => {
+      overlay.classList.remove('opacity-0', 'pointer-events-none', 'scale-105');
+    });
+  },
+
+  updateHeroPreloadStatus() {
+    const el = document.getElementById('hero-preload-status');
+    if (!el) return;
+    const ready = this.engine.getReadyCount();
+    const total = STUDIO_ASSETS.length;
+    if (ready >= total) {
+      el.className = 'flex items-center gap-2 text-emerald-400 font-semibold';
+      el.innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400"></span><span>⚡ 全部 3D 资产已就绪 (${ready}/${total}) · 点击秒进</span>`;
+    } else {
+      el.innerHTML = `<span class="w-1.5 h-1.5 rounded-full bg-sky-400 animate-ping"></span><span>后台并行预载 3D 资产中 (${ready}/${total})...</span>`;
+    }
+  },
+
   renderShaderBar() {
     document.getElementById('shader-toolbar').innerHTML = STUDIO_SHADERS.map(s =>
-      `<button data-action="shader" data-mode="${s.id}" id="btn-shade-${s.id}" class="px-2.5 py-1 rounded-lg text-zinc-400 hover:text-white transition">${s.label}</button>`
+      `<button data-action="shader" data-mode="${s.id}" id="btn-shade-${s.id}" class="px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition">${s.label}</button>`
     ).join('');
   },
 
@@ -348,16 +404,16 @@ const StudioUI = {
     document.getElementById('gallery-count').textContent = `${STUDIO_ASSETS.length} ASSETS`;
     document.getElementById('asset-list').innerHTML = STUDIO_ASSETS.map((item, idx) => {
       const badge = item.loadedPolys
-        ? `<span class="text-[10px] font-mono text-emerald-400">⚡ ${(item.loadedPolys / 1000).toFixed(1)}k</span>`
-        : `<span class="text-[10px] font-mono text-zinc-500">⏳ 预载中</span>`;
+        ? `<span class="text-[9px] px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/25">⚡ ${(item.loadedPolys / 1000).toFixed(1)}k</span>`
+        : `<span class="text-[9px] px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300">⏳ 预载中</span>`;
       return `
-        <button data-action="select-asset" data-id="${item.id}" class="asset-card w-full text-left rounded-lg px-3 py-2 flex flex-col gap-0.5 ${item.id === this.currentAssetId ? 'active' : ''}">
-          <div class="flex items-center justify-between">
-            <span class="text-[10px] font-mono text-zinc-400">0${idx + 1}</span>
+        <button data-action="select-asset" data-id="${item.id}" class="spotlight-card w-full text-left rounded-xl p-2.5 flex flex-col gap-1 cursor-pointer ${item.id === this.currentAssetId ? 'active' : ''}">
+          <div class="flex items-center justify-between relative z-10 pointer-events-none">
+            <span class="text-[10px] text-orange-400 font-bold">0${idx + 1} // ${item.category.split('//')[0]}</span>
             ${badge}
           </div>
-          <div class="text-xs font-semibold text-white truncate">${item.title}</div>
-          <div class="text-[10px] text-zinc-400 truncate">${item.sub}</div>
+          <div class="text-xs font-bold font-header text-white truncate relative z-10 pointer-events-none">${item.title}</div>
+          <div class="text-[10px] text-slate-400 truncate relative z-10 pointer-events-none">${item.sub}</div>
         </button>`;
     }).join('');
   },
@@ -367,10 +423,17 @@ const StudioUI = {
       const btn = document.getElementById('btn-shade-' + s.id);
       if (btn) {
         btn.className = s.id === mode
-          ? 'px-2.5 py-1 rounded-lg bg-[#f5792a]/25 text-orange-200 font-semibold transition'
-          : 'px-2.5 py-1 rounded-lg text-zinc-400 hover:text-white transition';
+          ? 'px-2.5 py-1 rounded-lg bg-orange-500/25 border border-orange-400/50 text-orange-200 font-bold transition'
+          : 'px-2.5 py-1 rounded-lg text-slate-400 hover:text-white transition';
       }
     });
+  },
+
+  setExplodeModeUI(mode) {
+    this.engine.mode = mode;
+    const isCard = mode === 'cardinal';
+    document.getElementById('btn-mode-cardinal').className = isCard ? 'px-2.5 py-1 rounded-md bg-orange-500/30 text-orange-200 font-bold transition' : 'px-2.5 py-1 rounded-md text-slate-400 hover:text-white transition';
+    document.getElementById('btn-mode-linear').className = !isCard ? 'px-2.5 py-1 rounded-md bg-orange-500/30 text-orange-200 font-bold transition' : 'px-2.5 py-1 rounded-md text-slate-400 hover:text-white transition';
   },
 
   selectAsset(id) {
@@ -383,8 +446,18 @@ const StudioUI = {
     document.getElementById('spec-title').textContent = asset.title;
     document.getElementById('spec-desc').textContent = asset.desc;
     document.getElementById('spec-tags').innerHTML = asset.tags.map(t =>
-      `<span class="text-[10px] font-mono px-2 py-0.5 rounded bg-white/5 border border-white/10 text-zinc-300">${t}</span>`
+      `<span class="text-[10px] px-2 py-0.5 rounded bg-orange-500/10 border border-orange-500/25 text-orange-200">${t}</span>`
     ).join('');
+
+    document.getElementById('workflow-list').innerHTML = asset.workflow.map(w => `
+      <div data-action="workflow-step" data-wf="${w.action}" class="step-node spotlight-card rounded-xl p-2.5 flex flex-col gap-1">
+        <div class="flex items-center justify-between relative z-10 pointer-events-none">
+          <span class="text-xs font-bold text-white font-header"><b class="text-orange-400 font-mono mr-1.5">${w.step}</b>${w.title}</span>
+          <span class="text-[9px] px-2 py-0.5 rounded-full bg-sky-500/15 text-sky-300">${w.tag} ➔</span>
+        </div>
+        <div class="text-[10px] text-slate-400 relative z-10 pointer-events-none">${w.desc}</div>
+      </div>
+    `).join('');
 
     const ctx = this.engine.ensureInstance(asset);
     const savedExp = ctx ? Math.round(ctx.explodeVal || 0) : 0;
@@ -401,15 +474,26 @@ const StudioUI = {
     const btn = document.getElementById('btn-toggle-drawer');
     if (this.drawerOpen) {
       panel.classList.remove('translate-x-[120%]', 'opacity-0', 'pointer-events-none');
-      btn.classList.add('bg-[#f5792a]/30', 'text-orange-200');
+      btn.className = 'px-2.5 py-1 rounded-lg bg-orange-500/20 border border-orange-500/40 text-orange-200 transition';
     } else {
       panel.classList.add('translate-x-[120%]', 'opacity-0', 'pointer-events-none');
-      btn.classList.remove('bg-[#f5792a]/30', 'text-orange-200');
+      btn.className = 'px-2.5 py-1 rounded-lg text-slate-300 hover:text-white hover:bg-white/10 transition';
     }
   },
 
+  async runExplodeTo(target) {
+    const slider = document.getElementById('explode-slider');
+    await this.engine.captureBaseline(slider.value);
+    slider.value = target;
+    document.getElementById('explode-percent').textContent = Math.round(target) + '%';
+    this.engine.explode(target, true, 0.65);
+  },
+
   bindBus() {
-    Bus.on('engine:preload-updated', () => this.renderAssetList());
+    Bus.on('engine:preload-updated', () => {
+      this.renderAssetList();
+      this.updateHeroPreloadStatus();
+    });
 
     Bus.on('engine:loading', () => {
       document.getElementById('loading-overlay').classList.remove('opacity-0', 'pointer-events-none');
@@ -418,6 +502,7 @@ const StudioUI = {
     Bus.on('engine:ready', (ctx) => {
       document.getElementById('loading-overlay').classList.add('opacity-0', 'pointer-events-none');
       this.renderAssetList();
+      this.updateHeroPreloadStatus();
 
       document.getElementById('spec-polys').textContent = ctx.polys.toLocaleString();
       document.getElementById('spec-verts').textContent = ctx.verts.toLocaleString();
@@ -430,14 +515,14 @@ const StudioUI = {
 
       const listEl = document.getElementById('subpart-list');
       if (singleMesh) {
-        listEl.innerHTML = `<div class="p-2.5 rounded-lg bg-white/[0.03] border border-white/[0.06] text-zinc-400">单网格合并资产，可使用底部「线框 / 灰模 / 纯色」检视拓扑与烘焙细节。</div>`;
+        listEl.innerHTML = `<div class="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/25 text-amber-200">单网格合并资产，点击上方互动步骤或底部工具栏检视拓扑线框与灰模细节。</div>`;
       } else {
         listEl.innerHTML = ctx.parts.map((p, idx) => `
-          <div class="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-white/[0.03] border border-white/[0.05]">
-            <span class="text-zinc-200 truncate max-w-[155px]"><b class="text-[#f5792a] mr-1">#${idx + 1}</b>${p.name}</span>
+          <div class="flex items-center justify-between px-2 py-1 rounded-lg bg-white/[0.03] border border-white/[0.05]">
+            <span class="text-slate-200 truncate max-w-[160px]"><b class="text-orange-400 mr-1">#${idx + 1}</b>${p.name}</span>
             <div class="flex gap-1">
-              <button data-action="pulse-part" data-idx="${idx}" class="px-1.5 py-0.5 rounded bg-[#f5792a]/20 text-orange-200 text-[10px]">${p.pulsed ? '收回' : '弹出'}</button>
-              <button data-action="vis-part" data-idx="${idx}" class="px-1.5 py-0.5 rounded bg-white/10 text-zinc-300 text-[10px]">${p.visible ? '显隐' : '已隐'}</button>
+              <button data-action="pulse-part" data-idx="${idx}" class="px-1.5 py-0.5 rounded bg-orange-500/20 text-orange-200 text-[9px]">${p.pulsed ? '收回' : '弹出'}</button>
+              <button data-action="vis-part" data-idx="${idx}" class="px-1.5 py-0.5 rounded bg-white/10 text-slate-300 text-[9px]">${p.visible ? '显隐' : '已隐'}</button>
             </div>
           </div>`).join('');
       }
@@ -450,6 +535,8 @@ const StudioUI = {
       if (!btn) return;
       const act = btn.dataset.action;
 
+      if (act === 'close-hero') this.closeHero();
+      if (act === 'open-hero') this.openHero();
       if (act === 'select-asset') this.selectAsset(btn.dataset.id);
       if (act === 'toggle-drawer') this.toggleDrawer();
       if (act === 'recenter' && this.engine.ready) this.engine.api.recenterCamera();
@@ -457,8 +544,8 @@ const StudioUI = {
 
       if (act === 'toggle-orbit') {
         const on = this.engine.toggleAutoOrbit();
-        btn.className = on ? 'flex items-center gap-1.5 text-emerald-400 hover:text-emerald-300 transition' : 'flex items-center gap-1.5 text-zinc-500 hover:text-zinc-300 transition';
-        btn.innerHTML = on ? `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span><span>转台: ON</span>` : `<span>转台: OFF</span>`;
+        btn.className = on ? 'flex items-center gap-1.5 text-emerald-400 hover:text-emerald-300 transition' : 'flex items-center gap-1.5 text-slate-500 hover:text-slate-300 transition';
+        btn.innerHTML = on ? `<span class="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping"></span><span>转台: ON</span>` : `<span>转台: OFF</span>`;
       }
 
       if (act === 'shader') {
@@ -467,21 +554,23 @@ const StudioUI = {
       }
 
       if (act === 'explode-mode') {
-        this.engine.mode = btn.dataset.mode;
-        const isCard = this.engine.mode === 'cardinal';
-        document.getElementById('btn-mode-cardinal').className = isCard ? 'px-2.5 py-1 rounded-md bg-[#f5792a]/25 text-orange-200 font-semibold transition' : 'px-2.5 py-1 rounded-md text-zinc-400 hover:text-white transition';
-        document.getElementById('btn-mode-linear').className = !isCard ? 'px-2.5 py-1 rounded-md bg-[#f5792a]/25 text-orange-200 font-semibold transition' : 'px-2.5 py-1 rounded-md text-zinc-400 hover:text-white transition';
+        this.setExplodeModeUI(btn.dataset.mode);
         const curVal = parseFloat(document.getElementById('explode-slider').value) || 0;
         if (curVal > 0) this.engine.explode(curVal, true, 0.55);
       }
 
-      if (act === 'explode-to') {
-        const target = parseFloat(btn.dataset.val);
-        const slider = document.getElementById('explode-slider');
-        await this.engine.captureBaseline(slider.value);
-        slider.value = target;
-        document.getElementById('explode-percent').textContent = Math.round(target) + '%';
-        this.engine.explode(target, true, 0.65);
+      if (act === 'explode-to') this.runExplodeTo(parseFloat(btn.dataset.val));
+
+      if (act === 'workflow-step') {
+        document.querySelectorAll('.step-node').forEach(n => n.classList.remove('active-step'));
+        btn.classList.add('active-step');
+        const wf = btn.dataset.wf;
+        if (wf === 'explode65') { this.setExplodeModeUI('cardinal'); this.runExplodeTo(65); }
+        else if (wf === 'linear65') { this.setExplodeModeUI('linear'); this.runExplodeTo(65); }
+        else if (['wire', 'clay', 'xray', 'albedo', 'rendered'].includes(wf)) {
+          this.highlightShader(wf);
+          this.engine.setShading(wf);
+        }
       }
 
       if (act === 'pulse-part') {
@@ -495,7 +584,6 @@ const StudioUI = {
       }
     });
 
-    // 全百分比丝滑节流控制（120ms 节流 + 松手精准落位）
     const expSlider = document.getElementById('explode-slider');
     let throttleTimer = null;
 
