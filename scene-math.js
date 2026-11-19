@@ -1,14 +1,10 @@
 /**
- * 3D 场景树递归、4x4 矩阵精确原地水平自转 & 世界空间防碰撞爆炸解算模块 (scene-math.js v22.0)
- * 参考 Autodesk Forge / Sketchfab 官方 Exploded View 架构重构：
- *  1. 精确 4x4 列主序矩阵运算：L(θ) = L0 * inv(W0) * T(C) * Rz(θ) * T(-C) * W0，
- *     彻底消除 Y-Up/Z-Up 轴错位与偏心，实现 100% 钉在原地的纯水平自转！
- *  2. 严格世界空间径向分层爆炸 + 3D AABB 方框碰撞避让 + 父矩阵逆变换还原，顺应真实装配方位、不乱飞。
+ * 3D 场景树递归、4x4 原地自转、紧凑防碰撞爆炸与 3D 拾取映射模块 (scene-math.js v23.0)
  */
 window.SceneGraphMath = {
   IGNORE_NAME_RE: /^(root|scene|world|ground|floor|plane|shadow|stage|backdrop|camera|light|env|sky|grid|base_plane|shadow_plane|sketchfab_model|gltf_scene)/i,
 
-  // ================= 4x4 & 3x3 列主序矩阵工具库 =================
+  // ================= 4x4 列主序矩阵工具库 =================
   mulMat4(a, b) {
     const out = new Array(16);
     for (let col = 0; col < 4; col++) {
@@ -60,7 +56,6 @@ window.SceneGraphMath = {
     return out;
   },
 
-  // 计算绕世界中心 center = [cx, cy, cz] 沿世界竖直 Z 轴旋转 angle 弧度的 4x4 矩阵
   makeWorldZSpinMatrix(center, angle) {
     const c = Math.cos(angle), s = Math.sin(angle);
     const cx = center[0], cy = center[1];
@@ -72,14 +67,11 @@ window.SceneGraphMath = {
     ];
   },
 
-  // 根据根节点的预计算矩阵，输出原地水平旋转 angle 弧度后的精确局部 4x4 矩阵
   computeRootSpinLocalMatrix(rootInfo, center, angle) {
     const mSpin = this.makeWorldZSpinMatrix(center, angle);
-    // L(θ) = (L0 * inv(W0)) * M_spin(θ) * W0
     return this.mulMat4(this.mulMat4(rootInfo.invP, mSpin), rootInfo.W0);
   },
 
-  // 将世界空间位移向量 ΔP_world 精确映射到节点的局部平移空间 Δt_local = inv(P_3x3) * ΔP_world
   worldDeltaToLocalDelta(invP4, worldVec) {
     return [
       invP4[0] * worldVec[0] + invP4[4] * worldVec[1] + invP4[8]  * worldVec[2],
@@ -88,7 +80,6 @@ window.SceneGraphMath = {
     ];
   },
 
-  // ================= 场景树解析与根节点提取 =================
   hasGeometryInSubtree(node, nodeMap, visited = new Set()) {
     if (!node || visited.has(node.instanceID)) return false;
     visited.add(node.instanceID);
@@ -98,6 +89,23 @@ window.SceneGraphMath = {
       const childObj = typeof ch === 'object' ? (nodeMap[ch.instanceID] || ch) : nodeMap[ch];
       return this.hasGeometryInSubtree(childObj, nodeMap, visited);
     });
+  },
+
+  // 递归将每个子部件及其所有子 Geometry 节点映射到 partIdx，支持在 3D 视口里直接点选部件！
+  buildNodeToPartIndex(rawNodes, nodeMap) {
+    const map = {};
+    const markSubtree = (node, partIdx, visited = new Set()) => {
+      if (!node || visited.has(node.instanceID)) return;
+      visited.add(node.instanceID);
+      map[node.instanceID] = partIdx;
+      if (!Array.isArray(node.children)) return;
+      node.children.forEach(ch => {
+        const obj = typeof ch === 'object' ? (nodeMap[ch.instanceID] || ch) : nodeMap[ch];
+        markSubtree(obj, partIdx, visited);
+      });
+    };
+    rawNodes.forEach((n, idx) => markSubtree(n, idx));
+    return map;
   },
 
   findTopLevelSpinRoots(nodeMap) {
@@ -134,7 +142,7 @@ window.SceneGraphMath = {
     });
   },
 
-  checkAABBOverlap(posA, halfA, posB, halfB, padding = 1.08) {
+  checkAABBOverlap(posA, halfA, posB, halfB, padding = 1.06) {
     const ox = (halfA[0] + halfB[0]) * padding - Math.abs(posA[0] - posB[0]);
     if (ox <= 0) return null;
     const oy = (halfA[1] + halfB[1]) * padding - Math.abs(posA[1] - posB[1]);
@@ -144,14 +152,12 @@ window.SceneGraphMath = {
     return [ox, oy, oz];
   },
 
-  // ================= 业界标准：世界空间径向分层 + AABB 防重叠爆炸 =================
   solveWorldRadialExplosion(extracted, worldCenter, worldRadius, boxHalves) {
     const count = extracted.length;
     const goldenAngle = Math.PI * (3 - Math.sqrt(5));
-
-    // 1. 计算每个零件在世界空间中的自然朝外方向（顺应真实装配方位，若原点重合则用均匀斐波那契球面）
     const dirs = [];
     const dists = [];
+
     let maxSpread = 0;
     extracted.forEach(p => {
       const d = Math.hypot(p.worldPos[0] - worldCenter[0], p.worldPos[1] - worldCenter[1], p.worldPos[2] - worldCenter[2]);
@@ -171,27 +177,25 @@ window.SceneGraphMath = {
       const fib = [Math.cos(phi) * fr, Math.sin(phi) * fr, fy];
 
       if (maxSpread > 1e-4 && d > maxSpread * 0.06) {
-        // 85% 顺应零件真实装配外推方位 + 15% 轻微错层防重叠（参考 SolidWorks Composer 径向拆解）
         const vx = (dx / d) * 0.85 + fib[0] * 0.15;
         const vy = (dy / d) * 0.85 + fib[1] * 0.15;
         const vz = (dz / d) * 0.85 + fib[2] * 0.15;
         const len = Math.hypot(vx, vy, vz) || 1;
         dirs.push([vx / len, vy / len, vz / len]);
-        // 外层零件走得更远，内层核心保持紧凑稳固
         const radialRatio = d / maxSpread;
-        dists.push(worldRadius * (0.35 + 0.65 * radialRatio));
+        dists.push(worldRadius * (0.30 + 0.70 * radialRatio));
       } else {
         dirs.push(fib);
-        const tier = 0.45 + 0.55 * ((idx % 3) / 2);
+        const tier = 0.42 + 0.58 * ((idx % 3) / 2);
         dists.push(worldRadius * tier);
       }
     });
 
-    // 2. 世界空间 3D AABB 简易方框碰撞检测与柔和外推解算
-    const hardCap = worldRadius * 1.65;
+    // 紧凑上限钳制：绝不再炸飞过远
+    const hardCap = worldRadius * 1.35;
     let resolvedPairs = 0;
 
-    for (let iter = 0; iter < 20; iter++) {
+    for (let iter = 0; iter < 18; iter++) {
       let anyOverlap = false;
       for (let i = 0; i < count; i++) {
         for (let j = i + 1; j < count; j++) {
@@ -206,13 +210,13 @@ window.SceneGraphMath = {
             extracted[j].worldPos[2] + dirs[j][2] * dists[j]
           ];
 
-          const ov = this.checkAABBOverlap(posI, boxHalves[i], posJ, boxHalves[j], 1.08);
+          const ov = this.checkAABBOverlap(posI, boxHalves[i], posJ, boxHalves[j], 1.06);
           if (!ov) continue;
 
           anyOverlap = true;
           resolvedPairs++;
           const minOv = Math.min(ov[0], ov[1], ov[2]);
-          const push = minOv * 0.55;
+          const push = minOv * 0.50;
           if (dists[i] >= dists[j]) dists[i] = Math.min(hardCap, dists[i] + push);
           else dists[j] = Math.min(hardCap, dists[j] + push);
         }
@@ -220,7 +224,6 @@ window.SceneGraphMath = {
       if (!anyOverlap) break;
     }
 
-    // 3. 世界空间严格零均值中心化（Σ ΔP_world = 0，保证视觉中心 100% 纹丝不动）
     let mx = 0, my = 0, mz = 0;
     const rawWorldDeltas = extracted.map((p, i) => {
       const v = [dirs[i][0] * dists[i], dirs[i][1] * dists[i], dirs[i][2] * dists[i]];
@@ -235,10 +238,8 @@ window.SceneGraphMath = {
     };
   },
 
-  // ================= 自动检测最长主轴的工程线性拆解 =================
   solveWorldLinearExplosion(extracted, worldCenter, worldRadius) {
     const count = extracted.length;
-    // 自动检测模型在世界空间 X/Y/Z 哪个轴跨度最大，作为主拆解轴
     let minV = [Infinity, Infinity, Infinity], maxV = [-Infinity, -Infinity, -Infinity];
     extracted.forEach(p => {
       for (let k = 0; k < 3; k++) {
@@ -254,7 +255,8 @@ window.SceneGraphMath = {
     const order = extracted.map((p, idx) => ({ idx, val: p.worldPos[mainAxis] }));
     order.sort((a, b) => a.val - b.val);
 
-    const halfSpan = worldRadius * 1.9;
+    // 线性跨度也同步收紧至紧凑区间
+    const halfSpan = worldRadius * 1.55;
     const worldDeltas = new Array(count);
 
     order.forEach((item, rank) => {
@@ -265,7 +267,6 @@ window.SceneGraphMath = {
         if (k === mainAxis) {
           delta[k] = (worldCenter[k] + u * halfSpan) - extracted[i].worldPos[k];
         } else {
-          // 非主轴方向温和归拢 50%，呈现整齐的工程分解序列
           delta[k] = (worldCenter[k] - extracted[i].worldPos[k]) * 0.50;
         }
       }
@@ -294,7 +295,7 @@ window.SceneGraphMath = {
   },
 
   analyzeAndBuildVectors(nodeMap, camDist = 4.0) {
-    if (!nodeMap) return { parts: [], spinRoots: [], strategy: 'NONE', collisionBadge: '' };
+    if (!nodeMap) return { parts: [], spinRoots: [], nodeToPartIndex: {}, strategy: 'NONE', collisionBadge: '' };
     const allNodes = Object.values(nodeMap);
     const spinRoots = this.findTopLevelSpinRoots(nodeMap);
 
@@ -333,7 +334,9 @@ window.SceneGraphMath = {
       rawNodes = allNodes.filter(n => n.type === 'MatrixTransform' && this.hasGeometryInSubtree(n, nodeMap)).slice(0, 1);
     }
 
+    const nodeToPartIndex = this.buildNodeToPartIndex(rawNodes, nodeMap);
     const count = rawNodes.length;
+
     if (count <= 1) {
       return {
         parts: rawNodes.map(n => ({
@@ -342,6 +345,7 @@ window.SceneGraphMath = {
           origPos: n.localMatrix ? [n.localMatrix[12] || 0, n.localMatrix[13] || 0, n.localMatrix[14] || 0] : [0, 0, 0]
         })),
         spinRoots,
+        nodeToPartIndex,
         strategy: 'SINGLE MESH',
         collisionBadge: '1 MESH'
       };
@@ -365,18 +369,18 @@ window.SceneGraphMath = {
     wcx /= count; wcy /= count; wcz /= count;
     const worldCenter = [wcx, wcy, wcz];
 
-    // 业界黄金爆炸半径：严格锚定相机视距的 15%（在任何单位制模型下视觉展开都恰到好处！）
-    const worldRadius = Math.max(0.05, camDist * 0.15);
-    const boxHalves = extracted.map(() => [worldRadius * 0.18, worldRadius * 0.18, worldRadius * 0.18]);
+    // 🎯 爆炸半径大幅收紧至 6.5% 相机视距（比之前缩小 57%，紧凑利落不飞散！）
+    const worldRadius = Math.max(0.02, camDist * 0.065);
+    const boxHalves = extracted.map(() => [worldRadius * 0.14, worldRadius * 0.14, worldRadius * 0.14]);
 
     const radialRes = this.solveWorldRadialExplosion(extracted, worldCenter, worldRadius, boxHalves);
     const linearWorldDeltas = this.solveWorldLinearExplosion(extracted, worldCenter, worldRadius);
 
-    // 将世界空间位移精确映射回每个零件自己的局部坐标系
     const parts = extracted.map((p, idx) => ({
       instanceID: p.instanceID,
       name: p.name,
       origPos: p.origPos,
+      worldPos: p.worldPos,
       cardinalDelta: this.worldDeltaToLocalDelta(p.invP4, radialRes.worldDeltas[idx]),
       linearDelta: this.worldDeltaToLocalDelta(p.invP4, linearWorldDeltas[idx])
     }));
@@ -384,6 +388,7 @@ window.SceneGraphMath = {
     return {
       parts,
       spinRoots,
+      nodeToPartIndex,
       strategy: `${count} PARTS`,
       collisionBadge: `AABB 避让 ${radialRes.resolvedPairs} 次`
     };
