@@ -460,8 +460,21 @@
     </section>
   </main>
 
-  <script src="./config.js"></script>
-  <script src="./scene-math.js"></script>
-  <script src="./app-engine.js"></script>
+  <!-- 自动时间戳防缓存按序加载器：每次刷新强制拉取最新 JS -->
+  <script>
+    (function loadFreshScripts() {
+      const bust = Date.now();
+      const files = ['./config.js', './scene-math.js', './app-engine.js'];
+      const loadNext = (idx) => {
+        if (idx >= files.length) return;
+        const s = document.createElement('script');
+        s.src = files[idx] + '?t=' + bust;
+        s.onload = () => loadNext(idx + 1);
+        document.body.appendChild(s);
+      };
+      loadNext(0);
+    })();
+  </script>
+
 </body>
 </html>
