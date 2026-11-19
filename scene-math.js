@@ -1,20 +1,19 @@
 /**
- * 3D 场景树递归、六向正交朝外爆炸与零跳变紧凑平衡解算模块 (scene-math.js v16.0)
- * 核心升级：
- *  1. 彻底移除易放大 100 倍的 avgParentScale 除法，最大展开半径直接锁死在模型真实跨度的 18% (紧凑密集，完美落在中央 HUD 圆环内)
- *  2. 彻底消除 0% -> 1% 的瞬间阶跃跳变：全程采用从 0 严格连续出发的平滑映射，配合 WebGL 原生 GPU 缓动过渡，极度丝滑
- *  3. 严格限制爆炸方向为【右(+X)、左(-X)、上(+Y)、下(-Y)、前(+Z)、后(-Z)】6 个正交朝外方向 + 简易方框 Hitbox 防重叠
+ * 3D 场景树递归与双模式爆炸解算模块 (scene-math.js v18.0)
+ * 两种差异鲜明的工程拆解模式：
+ *  1. 立体拆解 (cardinal)：严格沿【上/下/左/右/前/后】6向正交朝外紧凑散开 + 简易方框 Hitbox 防重叠
+ *  2. 线性排布 (linear)  ：将全部子零件沿单一水平主轴 (X轴) 按顺序排成一字工程队列（跨度 2.2x），直观展示零件清单
  */
 window.SceneGraphMath = {
   IGNORE_NAME_RE: /^(root|scene|world|ground|floor|plane|shadow|stage|backdrop|camera|light|env|sky|grid|base_plane|shadow_plane|sketchfab_model|gltf_scene)/i,
 
   CARDINAL_6_AXES: [
-    { id: '+X', label: '右(+X)', vec: [ 1,  0,  0], axisIdx: 0, sign:  1 },
-    { id: '-X', label: '左(-X)', vec: [-1,  0,  0], axisIdx: 0, sign: -1 },
-    { id: '+Y', label: '上(+Y)', vec: [ 0,  1,  0], axisIdx: 1, sign:  1 },
-    { id: '-Y', label: '下(-Y)', vec: [ 0, -1,  0], axisIdx: 1, sign: -1 },
-    { id: '+Z', label: '前(+Z)', vec: [ 0,  0,  1], axisIdx: 2, sign:  1 },
-    { id: '-Z', label: '后(-Z)', vec: [ 0,  0, -1], axisIdx: 2, sign: -1 }
+    { id: '+X', vec: [ 1,  0,  0], axisIdx: 0 },
+    { id: '-X', vec: [-1,  0,  0], axisIdx: 0 },
+    { id: '+Y', vec: [ 0,  1,  0], axisIdx: 1 },
+    { id: '-Y', vec: [ 0, -1,  0], axisIdx: 1 },
+    { id: '+Z', vec: [ 0,  0,  1], axisIdx: 2 },
+    { id: '-Z', vec: [ 0,  0, -1], axisIdx: 2 }
   ],
 
   hasGeometryInSubtree(node, nodeMap, visited = new Set()) {
@@ -84,17 +83,11 @@ window.SceneGraphMath = {
     return assignments;
   },
 
-  solveCompactHitboxLayout(extracted, boxHalves, center, maxRadialLimit, mode = 'cardinal6') {
+  // 模式 1：六向正交紧凑立体拆解 + 简易方框 Hitbox 防重叠
+  solveCardinalLayout(extracted, boxHalves, center, maxRadialLimit) {
     const count = extracted.length;
-    const dirs = extracted.map((p, idx) => {
-      if (mode === 'axial') {
-        const sign = idx % 2 === 0 ? 1 : -1;
-        return [sign, 0, 0];
-      }
-      return p.cardinalAxis.vec.slice();
-    });
-
-    const axisIdxOf = dirs.map(d => (Math.abs(d[0]) > 0.5 ? 0 : (Math.abs(d[1]) > 0.5 ? 1 : 2)));
+    const dirs = extracted.map(p => p.cardinalAxis.vec.slice());
+    const axisIdxOf = extracted.map(p => p.cardinalAxis.axisIdx);
     const targetDists = new Array(count).fill(0);
     const groupsByDir = {};
 
@@ -106,18 +99,15 @@ window.SceneGraphMath = {
       groupsByDir[key].push({ idx, proj });
     });
 
-    // 1. 紧凑分层：按碰撞箱厚度排布，严格压缩在 maxRadialLimit 以内
     Object.values(groupsByDir).forEach(list => {
       list.sort((a, b) => a.proj - b.proj);
       const len = list.length;
       list.forEach((item, rank) => {
-        const i = item.idx;
         const tierFrac = len > 1 ? (rank + 1) / len : 0.70;
-        targetDists[i] = maxRadialLimit * (0.28 + 0.72 * tierFrac);
+        targetDists[item.idx] = maxRadialLimit * (0.28 + 0.72 * tierFrac);
       });
     });
 
-    // 2. 轻量 3D 方框 Hitbox (AABB) 防重叠微调
     for (let iter = 0; iter < 12; iter++) {
       let anyOverlap = false;
       for (let i = 0; i < count; i++) {
@@ -132,13 +122,11 @@ window.SceneGraphMath = {
             extracted[j].origPos[1] + dirs[j][1] * targetDists[j],
             extracted[j].origPos[2] + dirs[j][2] * targetDists[j]
           ];
-
           const overlap = this.checkBoxHitboxOverlap(posI, boxHalves[i], posJ, boxHalves[j], 1.04);
           if (!overlap) continue;
 
           anyOverlap = true;
-          const axI = axisIdxOf[i];
-          const axJ = axisIdxOf[j];
+          const axI = axisIdxOf[i], axJ = axisIdxOf[j];
           if (axI === axJ) {
             const push = overlap[axI] * 0.40;
             if (targetDists[i] >= targetDists[j]) targetDists[i] = Math.min(maxRadialLimit * 1.15, targetDists[i] + push);
@@ -152,7 +140,7 @@ window.SceneGraphMath = {
       if (!anyOverlap) break;
     }
 
-    // 3. 左右/上下/前后视觉对称配平
+    // 相对轴向视觉对称配平
     for (let axis = 0; axis < 3; axis++) {
       let posMax = 0, negMax = 0;
       const posIdx = [], negIdx = [];
@@ -169,27 +157,56 @@ window.SceneGraphMath = {
       }
     }
 
-    return { dirs, targetDists };
+    return extracted.map((p, i) => [
+      dirs[i][0] * targetDists[i],
+      dirs[i][1] * targetDists[i],
+      dirs[i][2] * targetDists[i]
+    ]);
   },
 
-  /**
-   * 严格从 0 开始的纯连续平滑求值（0% -> 1% 零跳变！）
-   */
-  evaluateExplosionFrame(parts, percent, pattern = 'radial') {
+  // 模式 2：真正的“工程一字线性排布” —— 所有零件按 X 顺序沿水平单轴等距排开，同时将 Y/Z 归拢到中轴线，效果与立体拆解截然不同！
+  solveLinearQueueLayout(extracted, center, maxRadialLimit) {
+    const count = extracted.length;
+    const order = extracted.map((p, idx) => ({ idx, x: p.origPos[0] }));
+    order.sort((a, b) => a.x - b.x);
+
+    // 线性队列总半宽设为立体半径的 2.2 倍，清晰展开每一个零件
+    const halfSpan = maxRadialLimit * 2.2;
+    const deltas = new Array(count);
+
+    order.forEach((item, rank) => {
+      const i = item.idx;
+      const u = count > 1 ? (rank / (count - 1)) * 2 - 1 : 0; // 严格分布在 [-1, +1]
+      const targetX = center[0] + u * halfSpan;
+      // Y 和 Z 向中轴线温和归拢 65%，形成利落的水平零件队列
+      const targetY = extracted[i].origPos[1] + (center[1] - extracted[i].origPos[1]) * 0.65;
+      const targetZ = extracted[i].origPos[2] + (center[2] - extracted[i].origPos[2]) * 0.65;
+
+      deltas[i] = [
+        targetX - extracted[i].origPos[0],
+        targetY - extracted[i].origPos[1],
+        targetZ - extracted[i].origPos[2]
+      ];
+    });
+
+    return deltas;
+  },
+
+  // 严格从 0 开始的连续平滑求值（0% ~ 100% 全程零跳变）
+  evaluateExplosionFrame(parts, percent, mode = 'cardinal') {
     const count = parts.length;
     if (count <= 1) return [];
 
     const t = Math.max(0, Math.min(1, (parseFloat(percent) || 0) / 100));
     if (t <= 1e-4) return parts.map(p => p.origPos.slice());
 
-    const isAxial = pattern === 'axial';
+    const isLinear = mode === 'linear';
     return parts.map(p => {
-      const cfg = isAxial ? p.axialTight : p.cardinalTight;
-      const d = cfg.minDist * t;
+      const delta = isLinear ? p.linearDelta : p.cardinalDelta;
       return [
-        p.origPos[0] + cfg.dir[0] * d,
-        p.origPos[1] + cfg.dir[1] * d,
-        p.origPos[2] + cfg.dir[2] * d
+        p.origPos[0] + delta[0] * t,
+        p.origPos[1] + delta[1] * t,
+        p.origPos[2] + delta[2] * t
       ];
     });
   },
@@ -222,18 +239,18 @@ window.SceneGraphMath = {
     });
 
     let rawNodes = [];
-    let strategy = 'SINGLE-MESH (1)';
+    let strategy = 'SINGLE MESH';
 
     if (leafTransforms.length > 1) {
       rawNodes = leafTransforms;
-      strategy = `V16-COMPACT 6-WAY (${leafTransforms.length})`;
+      strategy = `MULTI-PART (${leafTransforms.length})`;
     } else if (leafTransforms.length === 1) {
       const childrenWithGeo = (leafTransforms[0].children || [])
         .map(ch => typeof ch === 'object' ? (nodeMap[ch.instanceID] || ch) : nodeMap[ch])
         .filter(ch => ch && this.hasGeometryInSubtree(ch, nodeMap));
       if (childrenWithGeo.length > 1) {
         rawNodes = childrenWithGeo;
-        strategy = `V16-COMPACT GROUP (${childrenWithGeo.length})`;
+        strategy = `GROUP-PART (${childrenWithGeo.length})`;
       } else {
         rawNodes = leafTransforms;
       }
@@ -248,7 +265,6 @@ window.SceneGraphMath = {
         parts: rawNodes.map(n => ({
           instanceID: n.instanceID,
           name: n.name || 'Merged_Mesh',
-          nodeType: n.type,
           origPos: n.localMatrix ? [n.localMatrix[12] || 0, n.localMatrix[13] || 0, n.localMatrix[14] || 0] : [0, 0, 0]
         })),
         strategy
@@ -259,8 +275,7 @@ window.SceneGraphMath = {
       const lm = n.localMatrix;
       return {
         instanceID: n.instanceID,
-        name: (n.name || `${n.type}_${n.instanceID}`).replace(/_/g, ' '),
-        nodeType: n.type,
+        name: (n.name || `Part_${n.instanceID}`).replace(/_/g, ' '),
         origPos: lm ? [lm[12] || 0, lm[13] || 0, lm[14] || 0] : [0, 0, 0],
         localScale: this.extractMatrixScale(lm)
       };
@@ -277,7 +292,6 @@ window.SceneGraphMath = {
       if (d > maxLocalSpread) maxLocalSpread = d;
     });
 
-    // 最大展开半径直接锁死在模型真实跨度的 18%（想更紧凑可改 0.14，想稍大可改 0.24）
     const maxRadialLimit = maxLocalSpread > 1e-3
       ? maxLocalSpread * 0.18
       : cameraDistanceScale * 0.12;
@@ -296,28 +310,18 @@ window.SceneGraphMath = {
       ];
     });
 
-    const cardinalTight = this.solveCompactHitboxLayout(extracted, boxHalves, center, maxRadialLimit, 'cardinal6');
-    const axialTight = this.solveCompactHitboxLayout(extracted, boxHalves, center, maxRadialLimit, 'axial');
+    const cardinalDeltas = this.solveCardinalLayout(extracted, boxHalves, center, maxRadialLimit);
+    const linearDeltas = this.solveLinearQueueLayout(extracted, center, maxRadialLimit);
 
-    const parts = extracted.map((p, idx) => {
-      const cDir = cardinalTight.dirs[idx];
-      const cDist = cardinalTight.targetDists[idx];
-      const aDir = axialTight.dirs[idx];
-      const aDist = axialTight.targetDists[idx];
-
-      return {
-        instanceID: p.instanceID,
-        name: `${p.name} [${p.cardinalAxis.id}]`,
-        nodeType: p.nodeType,
-        origPos: p.origPos,
-        boxHalf: boxHalves[idx],
-        cardinalTight: { dir: cDir, minDist: cDist },
-        axialTight: { dir: aDir, minDist: aDist },
-        localRadialVec: [cDir[0] * cDist, cDir[1] * cDist, cDir[2] * cDist],
-        visible: true,
-        pulsed: false
-      };
-    });
+    const parts = extracted.map((p, idx) => ({
+      instanceID: p.instanceID,
+      name: `${p.name} [${p.cardinalAxis.id}]`,
+      origPos: p.origPos,
+      cardinalDelta: cardinalDeltas[idx],
+      linearDelta: linearDeltas[idx],
+      visible: true,
+      pulsed: false
+    }));
 
     return { parts, strategy };
   }
