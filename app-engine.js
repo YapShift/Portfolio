@@ -462,7 +462,7 @@ window.SketchfabEngine = class SketchfabEngine {
     ctx.parts.forEach((p, idx) => {
       const pos = framePositions[idx];
       if (!pos) return;
-      ctx.api.translate(p.instanceID, pos, { duration: 0.04 });
+      ctx.api.translate(p.instanceID, pos, { duration: 0.45, easing: 'easeOutCubic' });
     });
 
 
