@@ -457,19 +457,14 @@ window.SketchfabEngine = class SketchfabEngine {
     ctx.explodeVal = parseFloat(percent) || 0;
     const factor = ctx.explodeVal / 100;
 
-    ctx.parts.forEach(p => {
-      const localDelta = this.pattern === 'axial' ? p.localAxialVec : p.localRadialVec;
-      if (!localDelta) return;
-      ctx.api.translate(
-        p.instanceID,
-        [
-          p.origPos[0] + localDelta[0] * factor,
-          p.origPos[1] + localDelta[1] * factor,
-          p.origPos[2] + localDelta[2] * factor
-        ],
-        { duration: 0.04 }
-      );
+    // 实时逐帧解算：由外向内分段时序 + 当前帧简易方框 Hitbox (AABB) 防重叠碰撞检测
+    const framePositions = SceneGraphMath.evaluateExplosionFrame(ctx.parts, ctx.explodeVal, this.pattern);
+    ctx.parts.forEach((p, idx) => {
+      const pos = framePositions[idx];
+      if (!pos) return;
+      ctx.api.translate(p.instanceID, pos, { duration: 0.04 });
     });
+
 
     if (adjustCam && ctx.baselineCam) {
       const z = 1 + factor * 0.45;
