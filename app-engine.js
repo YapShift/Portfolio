@@ -1,8 +1,8 @@
 /**
- * YapShift 3D Studio Engine (app-engine.js v22.0)
- * 1. 精确原地水平自转（绕模型几何中心世界 Z 轴旋转根节点矩阵，绝不翻跟头、绝不偏心、绝不锁镜头）
- * 2. 零顿挫爆炸控制（拖动滑块时采用 duration: 0 瞬时同步且不抢相机，松手或点按钮才执行单次 0.7s GPU 原生 easeOutCubic 过渡）
- * 3. 多模型并行预载秒切 + 部件独显隔离 + Anime.js v4 风格精密背景舞台
+ * YapShift 3D Studio Engine (app-engine.js v23.0)
+ * 1. 移动镜头时立刻暂停自转（camerastart 暂停，cameraend 后 1.2s 自动恢复）
+ * 2. 点击任意部件（支持直接在 3D 画面点击，或点击右侧列表）-> 隐藏其他部件 + 自动平滑放大聚焦到屏幕中心
+ * 3. 顶部自动弹出「退出独显 · 恢复原视角」悬浮按钮（同时支持 ESC 键），退出后丝滑飞回点击该部件前的摄像头位置
  */
 
 const STUDIO_ASSETS = [
@@ -12,10 +12,10 @@ const STUDIO_ASSETS = [
     sub: 'Suspention Assembly',
     category: 'MECHANICAL / HARD-SURFACE',
     uid: '08632550c5604444a14b53dc339b6589',
-    desc: '精密避震弹簧、上下控制臂与轴承座装配总成，支持防碰撞径向立体拆解、主轴线性排布与独立部件隔离。',
+    desc: '精密避震弹簧、上下控制臂与轴承座装配总成，支持紧凑防碰撞拆解与点击单件放大聚焦检视。',
     tags: ['Hard-Surface', 'Multi-Part', 'PBR Metal'],
     workflow: [
-      { step: '01', title: '立体径向防碰撞拆解', tag: '65%', action: 'explode65', desc: '顺应真实装配方位向外平滑散开，AABB 方框碰撞自动避让。' },
+      { step: '01', title: '立体径向防碰撞拆解', tag: '65%', action: 'explode65', desc: '顺应真实装配方位紧凑推开，AABB 方框碰撞自动避让。' },
       { step: '02', title: '工程主轴线性排布', tag: 'QUEUE', action: 'linear65', desc: '沿模型最长装配主轴展开零件队列，一览全件结构。' },
       { step: '03', title: 'X-Ray 内腔透视', tag: 'X-RAY', action: 'xray', desc: '切换 28% 半透明态，直视内部活塞杆与轴套配合。' }
     ]
@@ -50,9 +50,6 @@ window.Bus = {
   emit(event, payload) { (this.listeners[event] || []).forEach(fn => fn(payload)); }
 };
 
-/**
- * Anime.js v4 风格：高奢克制精密点阵舞台
- */
 const AnimeGridStage = {
   canvas: null, ctx: null, w: 0, h: 0, dpr: 1,
   mouse: { x: -9999, y: -9999, tx: -9999, ty: -9999 },
@@ -156,7 +153,7 @@ const AnimeGridStage = {
       }
     }
 
-    const rMain = Math.min(w, h) * (0.30 + this.explodeT * 0.08);
+    const rMain = Math.min(w, h) * (0.30 + this.explodeT * 0.06);
     ctx.strokeStyle = `rgba(255, 255, 255, ${0.055 + this.explodeT * 0.05})`;
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -208,11 +205,12 @@ class SketchfabPoolEngine {
 
   getZoomMultiplier(explodeVal) {
     const factor = (parseFloat(explodeVal) || 0) / 100;
-    return 1 + factor * (this.mode === 'linear' ? 0.65 : 0.35);
+    return 1 + factor * (this.mode === 'linear' ? 0.40 : 0.22);
   }
 
   syncCameraBaseline(ctx) {
     if (!ctx || !ctx.ready || !ctx.api) return;
+    if (ctx.selectedParts.size > 0) return; // 独显聚焦模式下不覆盖常规爆炸基准
     if (Date.now() < ctx.programmaticCamUntil) return;
     ctx.api.getCameraLookAt((err, cam) => {
       if (err || !cam) return;
@@ -242,12 +240,15 @@ class SketchfabPoolEngine {
 
     const ctx = {
       asset, iframe, api: null, ready: false,
-      parts: [], spinRoots: [], materials: [],
+      parts: [], spinRoots: [], nodeToPartIndex: {}, materials: [],
       strategy: '', collisionBadge: '', polys: 0, verts: 0,
       camDist: 4.0, spinCenter: [0, 0, 0], baselineCam: null,
       explodeVal: 0, shaderMode: 'rendered', lightDeg: 0,
       spinAngle: 0,
       selectedParts: new Set(),
+      savedPreFocusCam: null, // 记录进入单件聚焦前的精确摄像头位置！
+      userInteracting: false,
+      interactTimer: null,
       programmaticCamUntil: 0,
       explodingUntil: 0
     };
@@ -265,9 +266,28 @@ class SketchfabPoolEngine {
         api.addEventListener('viewerready', () => {
           ctx.ready = true;
 
+          // ✅ 1. 移动镜头时立刻暂停自转，松手后 1.2 秒平滑恢复
+          api.addEventListener('camerastart', () => {
+            if (Date.now() >= ctx.programmaticCamUntil) {
+              ctx.userInteracting = true;
+              if (ctx.interactTimer) clearTimeout(ctx.interactTimer);
+            }
+          });
           api.addEventListener('cameraend', () => {
             if (Date.now() >= ctx.programmaticCamUntil) {
               this.syncCameraBaseline(ctx);
+              if (ctx.interactTimer) clearTimeout(ctx.interactTimer);
+              ctx.interactTimer = setTimeout(() => { ctx.userInteracting = false; }, 1200);
+            }
+          });
+
+          // ✅ 2. 在 3D 画面里直接点击任意零件 -> 自动独显并放大居中！
+          api.addEventListener('click', (info) => {
+            if (!info || info.instanceID === undefined || info.instanceID === null) return;
+            if (ctx.parts.length <= 1) return;
+            const partIdx = ctx.nodeToPartIndex[info.instanceID];
+            if (partIdx !== undefined) {
+              this.focusSinglePart(partIdx, info.position3D);
             }
           });
 
@@ -277,7 +297,6 @@ class SketchfabPoolEngine {
               const vy = cam.position[1] - cam.target[1];
               const vz = cam.position[2] - cam.target[2];
               ctx.camDist = Math.max(0.1, Math.hypot(vx, vy, vz));
-              // 以 Sketchfab 初始自动居中的包围盒靶心作为模型精确原地自转中心！
               ctx.spinCenter = [cam.target[0], cam.target[1], cam.target[2]];
               ctx.baselineCam = { target: cam.target.slice(), baseVec: [vx, vy, vz] };
             }
@@ -288,6 +307,7 @@ class SketchfabPoolEngine {
                 const res = SceneGraphMath.analyzeAndBuildVectors(e2 ? null : nodeMap, ctx.camDist);
                 ctx.parts = res.parts;
                 ctx.spinRoots = res.spinRoots;
+                ctx.nodeToPartIndex = res.nodeToPartIndex;
                 ctx.strategy = res.strategy;
                 ctx.collisionBadge = res.collisionBadge;
 
@@ -329,13 +349,11 @@ class SketchfabPoolEngine {
     else Bus.emit('engine:loading');
   }
 
-  /**
-   * ✅ 精确原地水平自转（绕模型真实几何中心的世界 Z 轴旋转，不翻跟头、不偏心、完全不锁相机！）
-   */
+  // 精确原地水平自转（移动镜头或单件聚焦时自动暂停！）
   startInPlaceSpinLoop() {
     const tick = (now) => {
       requestAnimationFrame(tick);
-      if (now - this.lastSpinTick < 32) return; // 稳定 ~30FPS 丝滑原地转台
+      if (now - this.lastSpinTick < 32) return;
       this.lastSpinTick = now;
 
       const heroOverlay = document.getElementById('hero-overlay');
@@ -343,7 +361,7 @@ class SketchfabPoolEngine {
 
       const ctx = this.activeCtx;
       if (!ctx || !ctx.ready || !ctx.api || !this.autoSpinEnabled) return;
-      if (Date.now() < ctx.explodingUntil) return;
+      if (ctx.userInteracting || Date.now() < ctx.explodingUntil || ctx.selectedParts.size > 0) return;
       if (!ctx.spinRoots || !ctx.spinRoots.length) return;
 
       ctx.spinAngle = (ctx.spinAngle + 0.008) % (Math.PI * 2);
@@ -362,7 +380,7 @@ class SketchfabPoolEngine {
 
   captureBaseline(currentSliderVal) {
     const ctx = this.activeCtx;
-    if (!ctx || !ctx.ready || !ctx.api) return Promise.resolve();
+    if (!ctx || !ctx.ready || !ctx.api || ctx.selectedParts.size > 0) return Promise.resolve();
     const zoomMult = this.getZoomMultiplier(currentSliderVal);
     return new Promise((resolve) => {
       ctx.api.getCameraLookAt((err, cam) => {
@@ -381,11 +399,6 @@ class SketchfabPoolEngine {
     });
   }
 
-  /**
-   * ✅ 零顿挫爆炸控制：
-   * - 拖动滑块期间：durationSec = 0，直接瞬时更新零件坐标且不抢相机，彻底消除顿挫！
-   * - 松手或点击预设按钮：durationSec = 0.65，单次触发 GPU 原生 easeOutCubic 丝滑过渡 + 相机同步缩放！
-   */
   explode(percent, adjustCam = true, durationSec = 0.65) {
     const ctx = this.activeCtx;
     if (!ctx || !ctx.ready || !ctx.api || ctx.parts.length <= 1) return;
@@ -405,7 +418,7 @@ class SketchfabPoolEngine {
       }
     });
 
-    if (adjustCam && ctx.baselineCam && durationSec > 0) {
+    if (adjustCam && ctx.baselineCam && durationSec > 0 && ctx.selectedParts.size === 0) {
       const z = this.getZoomMultiplier(ctx.explodeVal);
       const t = ctx.baselineCam.target;
       const v = ctx.baselineCam.baseVec;
@@ -418,33 +431,104 @@ class SketchfabPoolEngine {
     }
   }
 
-  toggleIsolatePart(idx) {
-    const ctx = this.activeCtx;
-    if (!ctx || !ctx.ready || !ctx.api || !ctx.parts[idx]) return;
-    if (ctx.selectedParts.has(idx)) ctx.selectedParts.delete(idx);
-    else ctx.selectedParts.add(idx);
-    this.applyPartIsolation(ctx);
+  // ================= 单件独显放大聚焦 & 退出恢复原镜头 =================
+  savePreFocusCameraIfNeeded(ctx) {
+    if (ctx.savedPreFocusCam) return Promise.resolve();
+    return new Promise((resolve) => {
+      ctx.api.getCameraLookAt((err, cam) => {
+        if (!err && cam) {
+          ctx.savedPreFocusCam = {
+            position: cam.position.slice(),
+            target: cam.target.slice()
+          };
+        }
+        resolve();
+      });
+    });
   }
 
-  showAllParts() {
+  // 在 3D 视口直接点选单个部件：独显 + 放大居中
+  async focusSinglePart(idx, hitPos3D = null) {
+    const ctx = this.activeCtx;
+    if (!ctx || !ctx.ready || !ctx.api || !ctx.parts[idx]) return;
+    await this.savePreFocusCameraIfNeeded(ctx);
+    ctx.selectedParts.clear();
+    ctx.selectedParts.add(idx);
+    this.applyIsolationAndFocus(ctx, hitPos3D);
+  }
+
+  // 在右侧列表点击部件：切换选中（支持多选对比；全部取消自动退出并恢复原镜头）
+  async toggleIsolatePart(idx) {
+    const ctx = this.activeCtx;
+    if (!ctx || !ctx.ready || !ctx.api || !ctx.parts[idx]) return;
+
+    if (ctx.selectedParts.has(idx)) {
+      ctx.selectedParts.delete(idx);
+      if (ctx.selectedParts.size === 0) {
+        this.exitFocusMode();
+        return;
+      }
+      this.applyIsolationAndFocus(ctx);
+    } else {
+      await this.savePreFocusCameraIfNeeded(ctx);
+      ctx.selectedParts.add(idx);
+      this.applyIsolationAndFocus(ctx);
+    }
+  }
+
+  applyIsolationAndFocus(ctx, hitPos3D = null) {
+    ctx.parts.forEach((p, i) => {
+      if (ctx.selectedParts.has(i)) ctx.api.show(p.instanceID);
+      else ctx.api.hide(p.instanceID);
+    });
+
+    Bus.emit('engine:isolation-updated', ctx);
+
+    // 等待 60ms 让 Sketchfab 更新可见场景树包围盒，然后精准放大居中到所选部件！
+    ctx.programmaticCamUntil = Date.now() + 1400;
+    setTimeout(() => {
+      if (!ctx.api || ctx.selectedParts.size === 0) return;
+      if (typeof ctx.api.focusOnVisibleGeometries === 'function') {
+        ctx.api.focusOnVisibleGeometries();
+      } else if (hitPos3D && ctx.savedPreFocusCam) {
+        // 兜底方案：若环境不支持 focusOnVisibleGeometries，则沿原视线方向推进到该部件
+        const p = ctx.savedPreFocusCam.position;
+        const t = ctx.savedPreFocusCam.target;
+        const dir = [p[0] - t[0], p[1] - t[1], p[2] - t[2]];
+        const scale = 0.42;
+        ctx.api.setCameraLookAt(
+          [hitPos3D[0] + dir[0] * scale, hitPos3D[1] + dir[1] * scale, hitPos3D[2] + dir[2] * scale],
+          hitPos3D,
+          0.65
+        );
+      }
+    }, 60);
+  }
+
+  // 退出独显模式：显示全部零件 + 丝滑飞回点击该部件前的摄像头位置！
+  exitFocusMode() {
     const ctx = this.activeCtx;
     if (!ctx || !ctx.ready || !ctx.api) return;
     ctx.selectedParts.clear();
-    this.applyPartIsolation(ctx);
-  }
+    ctx.parts.forEach(p => ctx.api.show(p.instanceID));
 
-  applyPartIsolation(ctx) {
-    const hasSelection = ctx.selectedParts.size > 0;
-    ctx.parts.forEach((p, i) => {
-      if (!hasSelection || ctx.selectedParts.has(i)) ctx.api.show(p.instanceID);
-      else ctx.api.hide(p.instanceID);
-    });
+    if (ctx.savedPreFocusCam) {
+      const saved = ctx.savedPreFocusCam;
+      ctx.savedPreFocusCam = null;
+      ctx.programmaticCamUntil = Date.now() + 1100;
+      ctx.api.setCameraLookAt(saved.position, saved.target, 0.65);
+    }
+
     Bus.emit('engine:isolation-updated', ctx);
   }
 
   recenter() {
     const ctx = this.activeCtx;
     if (!ctx || !ctx.ready || !ctx.api) return;
+    if (ctx.selectedParts.size > 0) {
+      this.exitFocusMode();
+      return;
+    }
     ctx.programmaticCamUntil = Date.now() + 900;
     ctx.api.recenterCamera(() => {
       setTimeout(() => {
@@ -510,6 +594,7 @@ const StudioUI = {
 
   init() {
     AnimeGridStage.init();
+    this.mountFocusExitBar();
     this.engine = new SketchfabPoolEngine();
     this.initCardHighlight();
     this.renderShaderBar();
@@ -517,6 +602,36 @@ const StudioUI = {
     this.bindBus();
     this.engine.preloadAll(STUDIO_ASSETS);
     this.selectAsset(STUDIO_ASSETS[0].id);
+  },
+
+  // 自动挂载顶部居中「退出独显聚焦并恢复视角」悬浮条（无需修改 index.html）
+  mountFocusExitBar() {
+    if (document.getElementById('focus-exit-bar')) return;
+    const bar = document.createElement('div');
+    bar.id = 'focus-exit-bar';
+    bar.className = 'fixed top-6 left-1/2 -translate-x-1/2 z-30 arch-panel rounded-full pl-4 pr-2 py-1.5 flex items-center gap-3 text-xs font-mono transition-all duration-300 opacity-0 pointer-events-none -translate-y-2';
+    bar.innerHTML = `
+      <span class="w-1.5 h-1.5 rounded-full bg-[#e05a2b]"></span>
+      <span id="focus-part-label" class="text-zinc-200 max-w-[220px] truncate"></span>
+      <button data-action="show-all-parts" class="px-3 py-1 rounded-full bg-[#e05a2b] hover:bg-[#f06736] text-white text-[10px] font-semibold tracking-wider transition cursor-pointer">
+        ✕ 退出聚焦 · 恢复视角 (ESC)
+      </button>
+    `;
+    document.body.appendChild(bar);
+  },
+
+  updateFocusExitBar(ctx) {
+    const bar = document.getElementById('focus-exit-bar');
+    const label = document.getElementById('focus-part-label');
+    if (!bar || !label) return;
+
+    if (ctx && ctx.selectedParts.size > 0) {
+      const names = Array.from(ctx.selectedParts).map(i => ctx.parts[i] ? ctx.parts[i].name : '').filter(Boolean);
+      label.textContent = names.length === 1 ? `独显聚焦：${names[0]}` : `已独显 ${names.length} 个部件`;
+      bar.classList.remove('opacity-0', 'pointer-events-none', '-translate-y-2');
+    } else {
+      bar.classList.add('opacity-0', 'pointer-events-none', '-translate-y-2');
+    }
   },
 
   initCardHighlight() {
@@ -583,6 +698,8 @@ const StudioUI = {
   renderSubpartList(ctx) {
     const listEl = document.getElementById('subpart-list');
     const resetBtn = document.getElementById('btn-show-all');
+    this.updateFocusExitBar(ctx);
+
     if (!ctx || ctx.parts.length <= 1) {
       if (resetBtn) resetBtn.classList.add('hidden');
       listEl.innerHTML = `<div class="p-2.5 rounded-lg bg-white/[0.02] border border-white/[0.06] text-zinc-500">单网格合并资产，请使用底部材质模式检视拓扑与烘焙。</div>`;
@@ -596,7 +713,7 @@ const StudioUI = {
       return `
         <button data-action="isolate-part" data-idx="${idx}" class="part-row w-full text-left flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-white/[0.025] border border-white/[0.05] hover:border-white/20 text-zinc-300 cursor-pointer ${isSelected ? 'isolated' : ''}">
           <span class="truncate max-w-[210px] pointer-events-none"><b class="text-zinc-500 mr-1.5">${String(idx + 1).padStart(2, '0')}</b>${p.name}</span>
-          <span class="text-[9px] font-mono uppercase pointer-events-none ${isSelected ? 'text-[#e05a2b]' : 'text-zinc-600'}">${isSelected ? 'SOLO' : 'VIEW'}</span>
+          <span class="text-[9px] font-mono uppercase pointer-events-none ${isSelected ? 'text-[#e05a2b]' : 'text-zinc-600'}">${isSelected ? 'FOCUS' : 'VIEW'}</span>
         </button>`;
     }).join('');
   },
@@ -653,6 +770,7 @@ const StudioUI = {
     const shaderDef = STUDIO_SHADERS.find(s => s.id === savedShader);
     if (shaderDef) AnimeGridStage.setAccent(shaderDef.rgb);
 
+    this.updateFocusExitBar(ctx);
     this.engine.selectModel(asset);
   },
 
@@ -674,7 +792,7 @@ const StudioUI = {
     await this.engine.captureBaseline(slider.value);
     slider.value = target;
     document.getElementById('explode-percent').textContent = Math.round(target) + '%';
-    this.engine.explode(target, true, 0.70);
+    this.engine.explode(target, true, 0.65);
   },
 
   bindBus() {
@@ -708,6 +826,13 @@ const StudioUI = {
   },
 
   bindEvents() {
+    // ESC 快捷键退出单件聚焦并恢复原视角
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this.engine.activeCtx && this.engine.activeCtx.selectedParts.size > 0) {
+        this.engine.exitFocusMode();
+      }
+    });
+
     document.body.addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-action]');
       if (!btn) return;
@@ -735,7 +860,7 @@ const StudioUI = {
       if (act === 'explode-mode') {
         this.setExplodeModeUI(btn.dataset.mode);
         const curVal = parseFloat(document.getElementById('explode-slider').value) || 0;
-        if (curVal > 0) this.engine.explode(curVal, true, 0.65);
+        if (curVal > 0) this.engine.explode(curVal, true, 0.60);
       }
 
       if (act === 'explode-to') this.runExplodeTo(parseFloat(btn.dataset.val));
@@ -751,10 +876,9 @@ const StudioUI = {
       }
 
       if (act === 'isolate-part') this.engine.toggleIsolatePart(parseInt(btn.dataset.idx, 10));
-      if (act === 'show-all-parts') this.engine.showAllParts();
+      if (act === 'show-all-parts') this.engine.exitFocusMode();
     });
 
-    // 🎯 零顿挫丝滑交互：拖动期间 duration=0 瞬时同步且不抢镜头，松手后相机柔和补位缩放
     const expSlider = document.getElementById('explode-slider');
     let rafPending = false;
 
@@ -771,7 +895,7 @@ const StudioUI = {
       });
     });
     expSlider.addEventListener('change', (e) => {
-      this.engine.explode(e.target.value, true, 0.50);
+      this.engine.explode(e.target.value, true, 0.45);
     });
 
     document.getElementById('light-slider').addEventListener('input', (e) => {
