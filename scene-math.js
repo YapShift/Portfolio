@@ -1,18 +1,94 @@
 /**
- * 3D 场景树递归、强力 AABB 方框碰撞解算与模型自转根节点提取 (scene-math.js v21.0)
+ * 3D 场景树递归、4x4 矩阵精确原地水平自转 & 世界空间防碰撞爆炸解算模块 (scene-math.js v22.0)
+ * 参考 Autodesk Forge / Sketchfab 官方 Exploded View 架构重构：
+ *  1. 精确 4x4 列主序矩阵运算：L(θ) = L0 * inv(W0) * T(C) * Rz(θ) * T(-C) * W0，
+ *     彻底消除 Y-Up/Z-Up 轴错位与偏心，实现 100% 钉在原地的纯水平自转！
+ *  2. 严格世界空间径向分层爆炸 + 3D AABB 方框碰撞避让 + 父矩阵逆变换还原，顺应真实装配方位、不乱飞。
  */
 window.SceneGraphMath = {
   IGNORE_NAME_RE: /^(root|scene|world|ground|floor|plane|shadow|stage|backdrop|camera|light|env|sky|grid|base_plane|shadow_plane|sketchfab_model|gltf_scene)/i,
 
-  CARDINAL_6_AXES: [
-    { id: '+X', vec: [ 1,  0,  0], axisIdx: 0 },
-    { id: '-X', vec: [-1,  0,  0], axisIdx: 0 },
-    { id: '+Y', vec: [ 0,  1,  0], axisIdx: 1 },
-    { id: '-Y', vec: [ 0, -1,  0], axisIdx: 1 },
-    { id: '+Z', vec: [ 0,  0,  1], axisIdx: 2 },
-    { id: '-Z', vec: [ 0,  0, -1], axisIdx: 2 }
-  ],
+  // ================= 4x4 & 3x3 列主序矩阵工具库 =================
+  mulMat4(a, b) {
+    const out = new Array(16);
+    for (let col = 0; col < 4; col++) {
+      for (let row = 0; row < 4; row++) {
+        out[col * 4 + row] =
+          a[0 * 4 + row] * b[col * 4 + 0] +
+          a[1 * 4 + row] * b[col * 4 + 1] +
+          a[2 * 4 + row] * b[col * 4 + 2] +
+          a[3 * 4 + row] * b[col * 4 + 3];
+      }
+    }
+    return out;
+  },
 
+  invertMat4(m) {
+    const out = new Array(16);
+    const a00 = m[0], a01 = m[1], a02 = m[2], a03 = m[3];
+    const a10 = m[4], a11 = m[5], a12 = m[6], a13 = m[7];
+    const a20 = m[8], a21 = m[9], a22 = m[10], a23 = m[11];
+    const a30 = m[12], a31 = m[13], a32 = m[14], a33 = m[15];
+
+    const b00 = a00 * a11 - a01 * a10, b01 = a00 * a12 - a02 * a10;
+    const b02 = a00 * a13 - a03 * a10, b03 = a01 * a12 - a02 * a11;
+    const b04 = a01 * a13 - a03 * a11, b05 = a02 * a13 - a03 * a12;
+    const b06 = a20 * a31 - a21 * a30, b07 = a20 * a32 - a22 * a30;
+    const b08 = a20 * a33 - a23 * a30, b09 = a21 * a32 - a22 * a31;
+    const b10 = a21 * a33 - a23 * a31, b11 = a22 * a33 - a23 * a32;
+
+    let det = b00 * b11 - b01 * b10 + b02 * b09 + b03 * b08 - b04 * b07 + b05 * b06;
+    if (Math.abs(det) < 1e-12) return [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+    det = 1.0 / det;
+
+    out[0]  = (a11 * b11 - a12 * b10 + a13 * b09) * det;
+    out[1]  = (a02 * b10 - a01 * b11 - a03 * b09) * det;
+    out[2]  = (a31 * b05 - a32 * b04 + a33 * b03) * det;
+    out[3]  = (a22 * b04 - a21 * b05 - a23 * b03) * det;
+    out[4]  = (a12 * b08 - a10 * b11 - a13 * b07) * det;
+    out[5]  = (a00 * b11 - a02 * b08 + a03 * b07) * det;
+    out[6]  = (a32 * b02 - a30 * b05 - a33 * b01) * det;
+    out[7]  = (a20 * b05 - a22 * b02 + a23 * b01) * det;
+    out[8]  = (a10 * b10 - a11 * b08 + a13 * b06) * det;
+    out[9]  = (a01 * b08 - a00 * b10 - a03 * b06) * det;
+    out[10] = (a30 * b04 - a31 * b02 + a33 * b00) * det;
+    out[11] = (a21 * b02 - a20 * b04 - a23 * b00) * det;
+    out[12] = (a11 * b07 - a10 * b09 - a12 * b06) * det;
+    out[13] = (a00 * b09 - a01 * b07 + a02 * b06) * det;
+    out[14] = (a31 * b01 - a30 * b03 - a32 * b00) * det;
+    out[15] = (a20 * b03 - a21 * b01 + a22 * b00) * det;
+    return out;
+  },
+
+  // 计算绕世界中心 center = [cx, cy, cz] 沿世界竖直 Z 轴旋转 angle 弧度的 4x4 矩阵
+  makeWorldZSpinMatrix(center, angle) {
+    const c = Math.cos(angle), s = Math.sin(angle);
+    const cx = center[0], cy = center[1];
+    return [
+      c,  s, 0, 0,
+     -s,  c, 0, 0,
+      0,  0, 1, 0,
+      cx - (c * cx - s * cy), cy - (s * cx + c * cy), 0, 1
+    ];
+  },
+
+  // 根据根节点的预计算矩阵，输出原地水平旋转 angle 弧度后的精确局部 4x4 矩阵
+  computeRootSpinLocalMatrix(rootInfo, center, angle) {
+    const mSpin = this.makeWorldZSpinMatrix(center, angle);
+    // L(θ) = (L0 * inv(W0)) * M_spin(θ) * W0
+    return this.mulMat4(this.mulMat4(rootInfo.invP, mSpin), rootInfo.W0);
+  },
+
+  // 将世界空间位移向量 ΔP_world 精确映射到节点的局部平移空间 Δt_local = inv(P_3x3) * ΔP_world
+  worldDeltaToLocalDelta(invP4, worldVec) {
+    return [
+      invP4[0] * worldVec[0] + invP4[4] * worldVec[1] + invP4[8]  * worldVec[2],
+      invP4[1] * worldVec[0] + invP4[5] * worldVec[1] + invP4[9]  * worldVec[2],
+      invP4[2] * worldVec[0] + invP4[6] * worldVec[1] + invP4[10] * worldVec[2]
+    ];
+  },
+
+  // ================= 场景树解析与根节点提取 =================
   hasGeometryInSubtree(node, nodeMap, visited = new Set()) {
     if (!node || visited.has(node.instanceID)) return false;
     visited.add(node.instanceID);
@@ -24,19 +100,7 @@ window.SceneGraphMath = {
     });
   },
 
-  extractMatrixScale(m) {
-    if (!m || m.length < 11) return [1, 1, 1];
-    return [
-      Math.hypot(m[0], m[1], m[2]) || 1,
-      Math.hypot(m[4], m[5], m[6]) || 1,
-      Math.hypot(m[8], m[9], m[10]) || 1
-    ];
-  },
-
-  /**
-   * 寻找最顶层包含几何体的 MatrixTransform 根节点（用于不锁相机的模型自转转台）
-   */
-  findTopLevelTransformRoots(nodeMap) {
+  findTopLevelSpinRoots(nodeMap) {
     if (!nodeMap) return [];
     const allNodes = Object.values(nodeMap);
     const parentOf = new Map();
@@ -62,11 +126,15 @@ window.SceneGraphMath = {
       return true;
     });
 
-    return roots.map(r => r.instanceID);
+    return roots.map(r => {
+      const L0 = (r.localMatrix && r.localMatrix.length === 16) ? r.localMatrix.slice() : [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+      const W0 = (r.worldMatrix && r.worldMatrix.length === 16) ? r.worldMatrix.slice() : L0.slice();
+      const invP = this.mulMat4(L0, this.invertMat4(W0));
+      return { instanceID: r.instanceID, L0, W0, invP };
+    });
   },
 
-  // 严格 3D AABB 简易方框型 Hitbox 碰撞检测
-  checkBoxHitboxOverlap(posA, halfA, posB, halfB, padding = 1.12) {
+  checkAABBOverlap(posA, halfA, posB, halfB, padding = 1.08) {
     const ox = (halfA[0] + halfB[0]) * padding - Math.abs(posA[0] - posB[0]);
     if (ox <= 0) return null;
     const oy = (halfA[1] + halfB[1]) * padding - Math.abs(posA[1] - posB[1]);
@@ -76,165 +144,135 @@ window.SceneGraphMath = {
     return [ox, oy, oz];
   },
 
-  assignOrthogonalOutwardAxes(extracted, center, maxSpread) {
+  // ================= 业界标准：世界空间径向分层 + AABB 防重叠爆炸 =================
+  solveWorldRadialExplosion(extracted, worldCenter, worldRadius, boxHalves) {
     const count = extracted.length;
-    const axisCounts = [0, 0, 0, 0, 0, 0];
-    const assignments = new Array(count);
+    const goldenAngle = Math.PI * (3 - Math.sqrt(5));
+
+    // 1. 计算每个零件在世界空间中的自然朝外方向（顺应真实装配方位，若原点重合则用均匀斐波那契球面）
+    const dirs = [];
+    const dists = [];
+    let maxSpread = 0;
+    extracted.forEach(p => {
+      const d = Math.hypot(p.worldPos[0] - worldCenter[0], p.worldPos[1] - worldCenter[1], p.worldPos[2] - worldCenter[2]);
+      if (d > maxSpread) maxSpread = d;
+    });
 
     extracted.forEach((p, idx) => {
-      const dx = p.origPos[0] - center[0];
-      const dy = p.origPos[1] - center[1];
-      const dz = p.origPos[2] - center[2];
-      const dist = Math.hypot(dx, dy, dz);
+      const dx = p.worldPos[0] - worldCenter[0];
+      const dy = p.worldPos[1] - worldCenter[1];
+      const dz = p.worldPos[2] - worldCenter[2];
+      const d = Math.hypot(dx, dy, dz);
 
-      if (maxSpread > 1e-3 && dist > maxSpread * 0.04) {
-        const rel = [dx / dist, dy / dist, dz / dist];
-        let bestAxis = 0;
-        let bestScore = -Infinity;
+      const t = (idx + 0.5) / count;
+      const fy = 1 - 2 * t;
+      const fr = Math.sqrt(Math.max(0, 1 - fy * fy));
+      const phi = goldenAngle * idx;
+      const fib = [Math.cos(phi) * fr, Math.sin(phi) * fr, fy];
 
-        this.CARDINAL_6_AXES.forEach((ax, aIdx) => {
-          const dot = rel[0] * ax.vec[0] + rel[1] * ax.vec[1] + rel[2] * ax.vec[2];
-          const score = dot - axisCounts[aIdx] * 0.16;
-          if (dot > 0.02 && score > bestScore) {
-            bestScore = score;
-            bestAxis = aIdx;
-          }
-        });
-
-        assignments[idx] = this.CARDINAL_6_AXES[bestAxis];
-        axisCounts[bestAxis]++;
+      if (maxSpread > 1e-4 && d > maxSpread * 0.06) {
+        // 85% 顺应零件真实装配外推方位 + 15% 轻微错层防重叠（参考 SolidWorks Composer 径向拆解）
+        const vx = (dx / d) * 0.85 + fib[0] * 0.15;
+        const vy = (dy / d) * 0.85 + fib[1] * 0.15;
+        const vz = (dz / d) * 0.85 + fib[2] * 0.15;
+        const len = Math.hypot(vx, vy, vz) || 1;
+        dirs.push([vx / len, vy / len, vz / len]);
+        // 外层零件走得更远，内层核心保持紧凑稳固
+        const radialRatio = d / maxSpread;
+        dists.push(worldRadius * (0.35 + 0.65 * radialRatio));
       } else {
-        const aIdx = idx % 6;
-        assignments[idx] = this.CARDINAL_6_AXES[aIdx];
-        axisCounts[aIdx]++;
+        dirs.push(fib);
+        const tier = 0.45 + 0.55 * ((idx % 3) / 2);
+        dists.push(worldRadius * tier);
       }
     });
 
-    return assignments;
-  },
-
-  /**
-   * 强力 3D 方框 Hitbox 防重叠解算器（严格保证所有代理方框 0 重叠）
-   */
-  solveCardinalWithStrictHitbox(extracted, boxHalves, center, baseLimit) {
-    const count = extracted.length;
-    const dirs = extracted.map(p => p.cardinalAxis.vec.slice());
-    const axisIdxOf = extracted.map(p => p.cardinalAxis.axisIdx);
-    const targetDists = new Array(count).fill(0);
-    const groupsByDir = {};
-
-    extracted.forEach((p, idx) => {
-      const key = dirs[idx].join(',');
-      if (!groupsByDir[key]) groupsByDir[key] = [];
-      const rel = [p.origPos[0] - center[0], p.origPos[1] - center[1], p.origPos[2] - center[2]];
-      const proj = rel[0] * dirs[idx][0] + rel[1] * dirs[idx][1] + rel[2] * dirs[idx][2];
-      groupsByDir[key].push({ idx, proj });
-    });
-
-    // 1. 按同方向由内到外分层初始化（保证不越级穿插）
-    Object.values(groupsByDir).forEach(list => {
-      list.sort((a, b) => a.proj - b.proj);
-      const len = list.length;
-      list.forEach((item, rank) => {
-        const tierFrac = len > 1 ? (rank + 1) / len : 0.65;
-        targetDists[item.idx] = baseLimit * (0.25 + 0.75 * tierFrac);
-      });
-    });
-
-    // 2. 28 轮严格 3D AABB 方框碰撞分离解算
-    const hardCap = baseLimit * 1.95;
+    // 2. 世界空间 3D AABB 简易方框碰撞检测与柔和外推解算
+    const hardCap = worldRadius * 1.65;
     let resolvedPairs = 0;
 
-    for (let iter = 0; iter < 28; iter++) {
+    for (let iter = 0; iter < 20; iter++) {
       let anyOverlap = false;
       for (let i = 0; i < count; i++) {
         for (let j = i + 1; j < count; j++) {
           const posI = [
-            extracted[i].origPos[0] + dirs[i][0] * targetDists[i],
-            extracted[i].origPos[1] + dirs[i][1] * targetDists[i],
-            extracted[i].origPos[2] + dirs[i][2] * targetDists[i]
+            extracted[i].worldPos[0] + dirs[i][0] * dists[i],
+            extracted[i].worldPos[1] + dirs[i][1] * dists[i],
+            extracted[i].worldPos[2] + dirs[i][2] * dists[i]
           ];
           const posJ = [
-            extracted[j].origPos[0] + dirs[j][0] * targetDists[j],
-            extracted[j].origPos[1] + dirs[j][1] * targetDists[j],
-            extracted[j].origPos[2] + dirs[j][2] * targetDists[j]
+            extracted[j].worldPos[0] + dirs[j][0] * dists[j],
+            extracted[j].worldPos[1] + dirs[j][1] * dists[j],
+            extracted[j].worldPos[2] + dirs[j][2] * dists[j]
           ];
 
-          const overlap = this.checkBoxHitboxOverlap(posI, boxHalves[i], posJ, boxHalves[j], 1.12);
-          if (!overlap) continue;
+          const ov = this.checkAABBOverlap(posI, boxHalves[i], posJ, boxHalves[j], 1.08);
+          if (!ov) continue;
 
           anyOverlap = true;
           resolvedPairs++;
-          const axI = axisIdxOf[i], axJ = axisIdxOf[j];
-
-          if (axI === axJ) {
-            const push = overlap[axI] * 0.65 + baseLimit * 0.02;
-            if (targetDists[i] >= targetDists[j]) {
-              targetDists[i] = Math.min(hardCap, targetDists[i] + push);
-            } else {
-              targetDists[j] = Math.min(hardCap, targetDists[j] + push);
-            }
-          } else {
-            // 不同正交轴在中心附近碰撞：沿各自正交朝外轴彻底推开
-            targetDists[i] = Math.min(hardCap, targetDists[i] + overlap[axI] * 0.45);
-            targetDists[j] = Math.min(hardCap, targetDists[j] + overlap[axJ] * 0.45);
-          }
+          const minOv = Math.min(ov[0], ov[1], ov[2]);
+          const push = minOv * 0.55;
+          if (dists[i] >= dists[j]) dists[i] = Math.min(hardCap, dists[i] + push);
+          else dists[j] = Math.min(hardCap, dists[j] + push);
         }
       }
       if (!anyOverlap) break;
     }
 
-    // 3. 左右/上下/前后视觉平衡微调
-    for (let axis = 0; axis < 3; axis++) {
-      let posMax = 0, negMax = 0;
-      const posIdx = [], negIdx = [];
-      for (let i = 0; i < count; i++) {
-        if (dirs[i][axis] > 0.5) { posIdx.push(i); if (targetDists[i] > posMax) posMax = targetDists[i]; }
-        else if (dirs[i][axis] < -0.5) { negIdx.push(i); if (targetDists[i] > negMax) negMax = targetDists[i]; }
-      }
-      if (posIdx.length > 0 && negIdx.length > 0 && posMax > 1e-4 && negMax > 1e-4) {
-        const balancedMax = (posMax + negMax) * 0.5;
-        const sPos = Math.max(0.82, Math.min(1.18, balancedMax / posMax));
-        const sNeg = Math.max(0.82, Math.min(1.18, balancedMax / negMax));
-        posIdx.forEach(i => { targetDists[i] *= sPos; });
-        negIdx.forEach(i => { targetDists[i] *= sNeg; });
-      }
-    }
+    // 3. 世界空间严格零均值中心化（Σ ΔP_world = 0，保证视觉中心 100% 纹丝不动）
+    let mx = 0, my = 0, mz = 0;
+    const rawWorldDeltas = extracted.map((p, i) => {
+      const v = [dirs[i][0] * dists[i], dirs[i][1] * dists[i], dirs[i][2] * dists[i]];
+      mx += v[0]; my += v[1]; mz += v[2];
+      return v;
+    });
+    mx /= count; my /= count; mz /= count;
 
     return {
-      deltas: extracted.map((p, i) => [
-        dirs[i][0] * targetDists[i],
-        dirs[i][1] * targetDists[i],
-        dirs[i][2] * targetDists[i]
-      ]),
+      worldDeltas: rawWorldDeltas.map(v => [v[0] - mx, v[1] - my, v[2] - mz]),
       resolvedPairs
     };
   },
 
-  // 工程一字线性队列排布（与立体拆解形成鲜明对比）
-  solveLinearQueueLayout(extracted, center, baseLimit) {
+  // ================= 自动检测最长主轴的工程线性拆解 =================
+  solveWorldLinearExplosion(extracted, worldCenter, worldRadius) {
     const count = extracted.length;
-    const order = extracted.map((p, idx) => ({ idx, x: p.origPos[0] }));
-    order.sort((a, b) => a.x - b.x);
+    // 自动检测模型在世界空间 X/Y/Z 哪个轴跨度最大，作为主拆解轴
+    let minV = [Infinity, Infinity, Infinity], maxV = [-Infinity, -Infinity, -Infinity];
+    extracted.forEach(p => {
+      for (let k = 0; k < 3; k++) {
+        if (p.worldPos[k] < minV[k]) minV[k] = p.worldPos[k];
+        if (p.worldPos[k] > maxV[k]) maxV[k] = p.worldPos[k];
+      }
+    });
+    const spans = [maxV[0] - minV[0], maxV[1] - minV[1], maxV[2] - minV[2]];
+    let mainAxis = 0;
+    if (spans[1] > spans[mainAxis]) mainAxis = 1;
+    if (spans[2] > spans[mainAxis]) mainAxis = 2;
 
-    const halfSpan = baseLimit * 2.4;
-    const deltas = new Array(count);
+    const order = extracted.map((p, idx) => ({ idx, val: p.worldPos[mainAxis] }));
+    order.sort((a, b) => a.val - b.val);
+
+    const halfSpan = worldRadius * 1.9;
+    const worldDeltas = new Array(count);
 
     order.forEach((item, rank) => {
       const i = item.idx;
       const u = count > 1 ? (rank / (count - 1)) * 2 - 1 : 0;
-      const targetX = center[0] + u * halfSpan;
-      const targetY = extracted[i].origPos[1] + (center[1] - extracted[i].origPos[1]) * 0.65;
-      const targetZ = extracted[i].origPos[2] + (center[2] - extracted[i].origPos[2]) * 0.65;
-
-      deltas[i] = [
-        targetX - extracted[i].origPos[0],
-        targetY - extracted[i].origPos[1],
-        targetZ - extracted[i].origPos[2]
-      ];
+      const delta = [0, 0, 0];
+      for (let k = 0; k < 3; k++) {
+        if (k === mainAxis) {
+          delta[k] = (worldCenter[k] + u * halfSpan) - extracted[i].worldPos[k];
+        } else {
+          // 非主轴方向温和归拢 50%，呈现整齐的工程分解序列
+          delta[k] = (worldCenter[k] - extracted[i].worldPos[k]) * 0.50;
+        }
+      }
+      worldDeltas[i] = delta;
     });
 
-    return deltas;
+    return worldDeltas;
   },
 
   evaluateExplosionFrame(parts, percent, mode = 'cardinal') {
@@ -255,10 +293,10 @@ window.SceneGraphMath = {
     });
   },
 
-  analyzeAndBuildVectors(nodeMap, cameraDistanceScale = 1.0) {
-    if (!nodeMap) return { parts: [], rootNodeIDs: [], strategy: 'NONE', collisionBadge: '' };
+  analyzeAndBuildVectors(nodeMap, camDist = 4.0) {
+    if (!nodeMap) return { parts: [], spinRoots: [], strategy: 'NONE', collisionBadge: '' };
     const allNodes = Object.values(nodeMap);
-    const rootNodeIDs = this.findTopLevelTransformRoots(nodeMap);
+    const spinRoots = this.findTopLevelSpinRoots(nodeMap);
 
     const leafTransforms = allNodes.filter(n => {
       if (n.type !== 'MatrixTransform' || !this.hasGeometryInSubtree(n, nodeMap)) return false;
@@ -303,68 +341,51 @@ window.SceneGraphMath = {
           name: n.name || 'Merged_Mesh',
           origPos: n.localMatrix ? [n.localMatrix[12] || 0, n.localMatrix[13] || 0, n.localMatrix[14] || 0] : [0, 0, 0]
         })),
-        rootNodeIDs,
+        spinRoots,
         strategy: 'SINGLE MESH',
         collisionBadge: '1 MESH'
       };
     }
 
     const extracted = rawNodes.map(n => {
-      const lm = n.localMatrix;
+      const L0 = (n.localMatrix && n.localMatrix.length === 16) ? n.localMatrix : [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
+      const W0 = (n.worldMatrix && n.worldMatrix.length === 16) ? n.worldMatrix : L0;
+      const invP4 = this.mulMat4(L0, this.invertMat4(W0));
       return {
         instanceID: n.instanceID,
         name: (n.name || `Part_${n.instanceID}`).replace(/_/g, ' '),
-        origPos: lm ? [lm[12] || 0, lm[13] || 0, lm[14] || 0] : [0, 0, 0],
-        localScale: this.extractMatrixScale(lm)
+        origPos: [L0[12] || 0, L0[13] || 0, L0[14] || 0],
+        worldPos: [W0[12] || 0, W0[13] || 0, W0[14] || 0],
+        invP4
       };
     });
 
-    let cx = 0, cy = 0, cz = 0;
-    extracted.forEach(p => { cx += p.origPos[0]; cy += p.origPos[1]; cz += p.origPos[2]; });
-    cx /= count; cy /= count; cz /= count;
-    const center = [cx, cy, cz];
+    let wcx = 0, wcy = 0, wcz = 0;
+    extracted.forEach(p => { wcx += p.worldPos[0]; wcy += p.worldPos[1]; wcz += p.worldPos[2]; });
+    wcx /= count; wcy /= count; wcz /= count;
+    const worldCenter = [wcx, wcy, wcz];
 
-    let maxLocalSpread = 0;
-    extracted.forEach(p => {
-      const d = Math.hypot(p.origPos[0] - cx, p.origPos[1] - cy, p.origPos[2] - cz);
-      if (d > maxLocalSpread) maxLocalSpread = d;
-    });
+    // 业界黄金爆炸半径：严格锚定相机视距的 15%（在任何单位制模型下视觉展开都恰到好处！）
+    const worldRadius = Math.max(0.05, camDist * 0.15);
+    const boxHalves = extracted.map(() => [worldRadius * 0.18, worldRadius * 0.18, worldRadius * 0.18]);
 
-    const baseLimit = maxLocalSpread > 1e-3
-      ? maxLocalSpread * 0.22
-      : cameraDistanceScale * 0.14;
+    const radialRes = this.solveWorldRadialExplosion(extracted, worldCenter, worldRadius, boxHalves);
+    const linearWorldDeltas = this.solveWorldLinearExplosion(extracted, worldCenter, worldRadius);
 
-    const assignedAxes = this.assignOrthogonalOutwardAxes(extracted, center, maxLocalSpread);
-    extracted.forEach((p, idx) => { p.cardinalAxis = assignedAxes[idx]; });
-
-    // 生成真实有防护厚度的简易方框 Hitbox 半尺寸
-    const boxHalves = extracted.map(p => {
-      const s = p.localScale || [1, 1, 1];
-      const norm = Math.cbrt(s[0] * s[1] * s[2]) || 1;
-      const baseHalf = baseLimit * 0.22;
-      return [
-        baseHalf * Math.max(0.6, Math.min(1.45, s[0] / norm)),
-        baseHalf * Math.max(0.6, Math.min(1.45, s[1] / norm)),
-        baseHalf * Math.max(0.6, Math.min(1.45, s[2] / norm))
-      ];
-    });
-
-    const cardinalResult = this.solveCardinalWithStrictHitbox(extracted, boxHalves, center, baseLimit);
-    const linearDeltas = this.solveLinearQueueLayout(extracted, center, baseLimit);
-
+    // 将世界空间位移精确映射回每个零件自己的局部坐标系
     const parts = extracted.map((p, idx) => ({
       instanceID: p.instanceID,
-      name: `${p.name} [${p.cardinalAxis.id}]`,
+      name: p.name,
       origPos: p.origPos,
-      cardinalDelta: cardinalResult.deltas[idx],
-      linearDelta: linearDeltas[idx]
+      cardinalDelta: this.worldDeltaToLocalDelta(p.invP4, radialRes.worldDeltas[idx]),
+      linearDelta: this.worldDeltaToLocalDelta(p.invP4, linearWorldDeltas[idx])
     }));
 
     return {
       parts,
-      rootNodeIDs,
+      spinRoots,
       strategy: `${count} PARTS`,
-      collisionBadge: `AABB 0 重叠 (避让 ${cardinalResult.resolvedPairs} 次)`
+      collisionBadge: `AABB 避让 ${radialRes.resolvedPairs} 次`
     };
   }
 };
