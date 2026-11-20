@@ -1,12 +1,113 @@
 /**
  * YapShift 3D Workbench Engine (app-engine.js)
- * Clean, zero-redundancy orchestration powered by window.PortfolioConfig.
+ * Orchestrates multi-iframe WebGL caching, uninterrupted auto-resuming spin,
+ * custom tactical cursor HUD, and linked CAD part-name callouts.
  */
 
 const EventBus = {
   listeners: {},
   on(event, fn) { (this.listeners[event] = this.listeners[event] || []).push(fn); },
   emit(event, payload) { (this.listeners[event] || []).forEach(fn => fn(payload)); }
+};
+
+/**
+ * Exclusive Tactical Cursor Follower & Linked CAD Part-Name Callout System
+ */
+const CustomCursorHUD = {
+  el: null,
+  idxEl: null,
+  nameEl: null,
+  x: -9999, y: -9999,
+  tx: -9999, ty: -9999,
+  visible: false,
+  lockedPartActive: false,
+
+  init() {
+    const curCfg = window.PortfolioConfig.cursor;
+    if (!curCfg.enabled) return;
+
+    this.el = document.getElementById('yapshift-cursor-hud');
+    this.idxEl = document.getElementById('cursor-part-idx');
+    this.nameEl = document.getElementById('cursor-part-name');
+    if (!this.el) return;
+
+    // Track pointer smoothly across all parent UI surfaces
+    window.addEventListener('mousemove', (e) => {
+      this.setTarget(e.clientX, e.clientY, false);
+      const isCtrl = Boolean(e.target.closest('button, a, input, [data-action]'));
+      this.el.classList.toggle('is-interactive', isCtrl && !this.lockedPartActive);
+    }, { passive: true });
+
+    // Hide trailing ring when pointer enters cross-origin iframe empty space (until a 3D part is hovered)
+    const pool = document.getElementById('sketchfab-viewport-pool');
+    if (pool) {
+      pool.addEventListener('mouseenter', () => {
+        if (!this.lockedPartActive) this.hide();
+      });
+    }
+    document.addEventListener('mouseleave', () => this.hide());
+
+    requestAnimationFrame(() => this.loop());
+  },
+
+  setTarget(clientX, clientY, snapImmediately = false) {
+    if (!this.el) return;
+    this.tx = clientX;
+    this.ty = clientY;
+    if (snapImmediately || !this.visible) {
+      this.x = clientX;
+      this.y = clientY;
+    }
+    this.show();
+    const flipLimit = window.PortfolioConfig.cursor.flipLeftThresholdPx;
+    this.el.classList.toggle('flip-left', clientX > window.innerWidth - flipLimit);
+  },
+
+  lockOnPart(part, idx, coords) {
+    if (!this.el || !part || idx === null) {
+      this.unlockPart(false);
+      return;
+    }
+    this.lockedPartActive = true;
+    this.idxEl.textContent = `#${String(idx + 1).padStart(2, '0')}`;
+    this.nameEl.textContent = part.name;
+    this.el.classList.remove('is-interactive');
+    this.el.classList.add('is-part-lock');
+
+    if (coords && Number.isFinite(coords[0]) && Number.isFinite(coords[1])) {
+      this.setTarget(coords[0], coords[1], true);
+    }
+  },
+
+  unlockPart(keepCursorVisible = false) {
+    if (!this.el) return;
+    this.lockedPartActive = false;
+    this.el.classList.remove('is-part-lock');
+    if (!keepCursorVisible) this.hide();
+  },
+
+  show() {
+    if (!this.el || this.visible) return;
+    this.visible = true;
+    this.el.classList.remove('opacity-0');
+  },
+
+  hide() {
+    if (!this.el || !this.visible) return;
+    this.visible = false;
+    this.lockedPartActive = false;
+    this.el.classList.remove('is-part-lock', 'is-interactive');
+    this.el.classList.add('opacity-0');
+  },
+
+  loop() {
+    requestAnimationFrame(() => this.loop());
+    if (!this.visible || !this.el) return;
+    const lerp = window.PortfolioConfig.cursor.followLerp;
+    this.x += (this.tx - this.x) * lerp;
+    this.y += (this.ty - this.y) * lerp;
+    this.el.style.transform = `translate3d(${this.x.toFixed(1)}px, ${this.y.toFixed(1)}px, 0)`;
+  }
 };
 
 /**
@@ -73,7 +174,6 @@ const AnimeGridStage = {
     const cx = w * 0.5, cy = h * 0.5;
     const rgb = this.accentRGB;
 
-    // 1. Subtle radial studio top-light
     const studioGlow = ctx.createRadialGradient(cx, cy, 30, cx, cy, Math.max(w, h) * 0.52);
     studioGlow.addColorStop(0, `rgba(${rgb}, ${0.055 + this.explodeT * 0.035})`);
     studioGlow.addColorStop(0.5, 'rgba(255, 255, 255, 0.015)');
@@ -81,7 +181,6 @@ const AnimeGridStage = {
     ctx.fillStyle = studioGlow;
     ctx.fillRect(0, 0, w, h);
 
-    // 2. Batched static grid + localized magnetic cursor highlights
     const spacing = bgCfg.gridSpacing;
     const majorStep = bgCfg.majorCrosshairStep;
     const cols = Math.ceil(w / spacing);
@@ -134,7 +233,6 @@ const AnimeGridStage = {
     ctx.lineWidth = 1;
     ctx.stroke();
 
-    // Render localized magnetic nodes near cursor
     for (let i = 0; i < activeNodes.length; i++) {
       const n = activeNodes[i];
       const mix = 1 - n.dist / interactR;
@@ -158,7 +256,6 @@ const AnimeGridStage = {
       }
     }
 
-    // 3. Breathing concentric reference arcs
     const rMain = Math.min(w, h) * (bgCfg.reticleRadiusRatio + this.explodeT * bgCfg.reticleExplodeExpand);
     ctx.strokeStyle = `rgba(255, 255, 255, ${0.055 + this.explodeT * 0.05})`;
     ctx.lineWidth = 1;
@@ -188,11 +285,31 @@ class SketchfabPoolEngine {
     this.mode = 'radial';
     this.autoSpinEnabled = cfg.turntable.enabledByDefault;
     this.lastSpinTick = 0;
+    this.bindGlobalInteractionFallback();
     this.startInPlaceSpinLoop();
   }
 
   get activeCtx() { return this.instances.get(this.activeAssetId) || null; }
   get ready() { const ctx = this.activeCtx; return Boolean(ctx && ctx.ready); }
+
+  // Failsafe listener in case pointer drag starts inside iframe and releases outside
+  bindGlobalInteractionFallback() {
+    const scheduleResume = () => {
+      const ctx = this.activeCtx;
+      if (!ctx || !ctx.userInteracting) return;
+      this.scheduleSpinResume(ctx, window.PortfolioConfig.turntable.resumeAfterCameraIdleMs);
+    };
+    window.addEventListener('pointerup', scheduleResume, { passive: true });
+    window.addEventListener('touchend', scheduleResume, { passive: true });
+  }
+
+  scheduleSpinResume(ctx, delayMs) {
+    if (ctx.interactTimer) clearTimeout(ctx.interactTimer);
+    if (ctx.watchdogTimer) clearTimeout(ctx.watchdogTimer);
+    ctx.interactTimer = setTimeout(() => {
+      ctx.userInteracting = false;
+    }, delayMs);
+  }
 
   async fetchRestMeta(uid) {
     try {
@@ -250,9 +367,23 @@ class SketchfabPoolEngine {
     });
   }
 
+  /**
+   * Hover part handler:
+   * Suppresses part-name callout & outline when a single part is already isolated/focused.
+   */
   hoverPart(idx, screenCoords = null, fromList = false) {
     const ctx = this.activeCtx;
     if (!ctx || !ctx.ready || !ctx.api) return;
+
+    const onlyWhenUnfocused = window.PortfolioConfig.cursor.showPartLabelOnlyWhenUnfocused;
+    if (onlyWhenUnfocused && ctx.focusedPartIdx !== null) {
+      if (ctx.hoveredPartIdx !== null) {
+        ctx.hoveredPartIdx = null;
+        if (typeof ctx.api.highlightNode === 'function') ctx.api.highlightNode();
+      }
+      EventBus.emit('engine:hover-updated', { idx: null, part: null, screenCoords: null, fromList });
+      return;
+    }
 
     if (ctx.hoveredPartIdx !== idx) {
       ctx.hoveredPartIdx = idx;
@@ -272,36 +403,56 @@ class SketchfabPoolEngine {
   }
 
   clearHover(fromList = false) {
-    this.hoverPart(null, null, fromList);
+    const ctx = this.activeCtx;
+    if (ctx && ctx.hoveredPartIdx !== null) {
+      ctx.hoveredPartIdx = null;
+      if (ctx.api && typeof ctx.api.highlightNode === 'function') ctx.api.highlightNode();
+    }
+    EventBus.emit('engine:hover-updated', { idx: null, part: null, screenCoords: null, fromList });
   }
 
-  // Convert Sketchfab hover event coordinates to parent viewport clientX/clientY
-  resolveHoverScreenPosition(ctx, info, part) {
+  // Project 3D hit point (or 2D canvas point) into exact parent viewport CSS coordinates
+  resolveAndEmitPartHover(ctx, partIdx, info) {
+    const part = ctx.parts[partIdx];
+    if (!part) return;
+
     const rect = ctx.iframe.getBoundingClientRect();
+    let initialCoords = null;
+
     if (info && Array.isArray(info.position2D) && info.position2D.length >= 2) {
       let [x, y] = info.position2D;
-      // Normalize if devicePixelRatio scaled canvas coordinates exceed CSS bounds
       if (x > rect.width * 1.05 || y > rect.height * 1.05) {
         const dpr = window.devicePixelRatio || 1;
         x /= dpr;
         y /= dpr;
       }
-      return [rect.left + x, rect.top + y];
+      initialCoords = [rect.left + x, rect.top + y];
     }
-    if (typeof ctx.api.getWorldToScreenCoordinates === 'function') {
-      const worldPt = (info && info.position3D) || (part && part.worldPos);
-      if (worldPt) {
-        ctx.api.getWorldToScreenCoordinates(worldPt, (coord) => {
-          if (coord && Array.isArray(coord.canvasCoord) && ctx.hoveredPartIdx !== null) {
-            EventBus.emit('engine:tooltip-move', [
-              rect.left + coord.canvasCoord[0],
-              rect.top + coord.canvasCoord[1]
-            ]);
-          }
-        });
-      }
+
+    // Emit immediately if 2D coordinates are ready
+    if (initialCoords) {
+      this.hoverPart(partIdx, initialCoords, false);
     }
-    return null;
+
+    // Project exact 3D hit point via Sketchfab's authoritative top-left CSS coordinate converter
+    const worldPt = (info && Array.isArray(info.position3D) && info.position3D) || part.worldPos;
+    if (worldPt && typeof ctx.api.getWorldToScreenCoordinates === 'function') {
+      ctx.api.getWorldToScreenCoordinates(worldPt, (coord) => {
+        if (this.activeAssetId !== ctx.asset.id) return;
+        if (ctx.focusedPartIdx !== null) return;
+        if (coord && Array.isArray(coord.canvasCoord)) {
+          const exactCoords = [
+            rect.left + coord.canvasCoord[0],
+            rect.top + coord.canvasCoord[1]
+          ];
+          this.hoverPart(partIdx, exactCoords, false);
+        } else if (!initialCoords) {
+          this.hoverPart(partIdx, [rect.left + rect.width * 0.5, rect.top + rect.height * 0.5], false);
+        }
+      });
+    } else if (!initialCoords) {
+      this.hoverPart(partIdx, [rect.left + rect.width * 0.5, rect.top + rect.height * 0.5], false);
+    }
   }
 
   ensureInstance(asset) {
@@ -324,7 +475,7 @@ class SketchfabPoolEngine {
       camDist: 4.0, spinCenter: [0, 0, 0], defaultCam: null, baselineCam: null,
       explodeVal: 0, shaderMode: 'rendered', lightDeg: 0, spinAngle: 0,
       focusedPartIdx: null, hoveredPartIdx: null, savedPreFocusCam: null,
-      userInteracting: false, interactTimer: null,
+      userInteracting: false, interactTimer: null, watchdogTimer: null,
       programmaticCamUntil: 0, explodingUntil: 0
     };
     this.instances.set(asset.id, ctx);
@@ -340,49 +491,52 @@ class SketchfabPoolEngine {
         api.start();
         api.addEventListener('viewerready', () => {
           this.configureHighlightStyle(api);
-          const resumeDelay = window.PortfolioConfig.turntable.resumeAfterCameraIdleMs;
+          const turnCfg = window.PortfolioConfig.turntable;
+          const pickOpts = { pick: window.PortfolioConfig.interaction.pickMode || 'slow' };
 
+          // Pause spin immediately when camera starts moving + set watchdog so wheel-zoom never stalls spin
           api.addEventListener('camerastart', () => {
-            if (Date.now() >= ctx.programmaticCamUntil) {
-              ctx.userInteracting = true;
-              if (ctx.interactTimer) clearTimeout(ctx.interactTimer);
-            }
+            if (Date.now() < ctx.programmaticCamUntil) return;
+            ctx.userInteracting = true;
+            if (ctx.interactTimer) clearTimeout(ctx.interactTimer);
+            if (ctx.watchdogTimer) clearTimeout(ctx.watchdogTimer);
+            ctx.watchdogTimer = setTimeout(() => {
+              ctx.userInteracting = false;
+            }, turnCfg.interactionWatchdogMs);
           });
 
+          // Unconditionally resume spin after camera movement settles
           api.addEventListener('cameraend', () => {
             if (Date.now() >= ctx.programmaticCamUntil) {
               this.syncCameraBaseline(ctx);
-              if (ctx.interactTimer) clearTimeout(ctx.interactTimer);
-              ctx.interactTimer = setTimeout(() => { ctx.userInteracting = false; }, resumeDelay);
             }
+            this.scheduleSpinResume(ctx, turnCfg.resumeAfterCameraIdleMs);
           });
 
-          // 3D viewport hover -> copper outline + floating cursor part tooltip
+          // 3D part hover -> outline + linked reticle callout (only when not isolated)
           api.addEventListener('nodeMouseEnter', (info) => {
             if (this.activeAssetId !== asset.id || !info || info.instanceID == null) return;
-            if (ctx.parts.length <= 1) return;
+            if (ctx.parts.length <= 1 || ctx.focusedPartIdx !== null) return;
             const partIdx = ctx.nodeToPartIndex[info.instanceID];
             if (partIdx !== undefined) {
-              const coords = this.resolveHoverScreenPosition(ctx, info, ctx.parts[partIdx]);
-              this.hoverPart(partIdx, coords, false);
+              this.resolveAndEmitPartHover(ctx, partIdx, info);
             }
-          }, { pick: 'fast' });
+          }, pickOpts);
 
           api.addEventListener('nodeMouseLeave', () => {
             if (this.activeAssetId !== asset.id) return;
             this.clearHover(false);
-          }, { pick: 'fast' });
+          }, pickOpts);
 
-          // 3D viewport click -> single-part isolation & center zoom
+          // 3D part click -> isolate & center zoom
           api.addEventListener('click', (info) => {
             if (!info || info.instanceID == null || ctx.parts.length <= 1) return;
             const partIdx = ctx.nodeToPartIndex[info.instanceID];
             if (partIdx !== undefined) {
               this.selectSinglePartToFocus(partIdx, info.position3D);
             }
-          });
+          }, pickOpts);
 
-          // Fetch camera, materials, scene graph, and REST metadata in parallel
           const camPromise = new Promise(resolve => api.getCameraLookAt((err, cam) => resolve(!err ? cam : null)));
           const matPromise = new Promise(resolve => api.getMaterialList((err, mats) => resolve(!err && mats ? mats : [])));
           const nodePromise = new Promise(resolve => api.getNodeMap((err, nodeMap) => resolve(!err ? nodeMap : null)));
@@ -427,9 +581,12 @@ class SketchfabPoolEngine {
     return ctx;
   }
 
-  // Dirty-flag state reset: only dispatches IPC calls for properties that were actually modified
   resetModelState(ctx) {
     if (!ctx || !ctx.ready || !ctx.api) return;
+
+    ctx.userInteracting = false;
+    if (ctx.interactTimer) clearTimeout(ctx.interactTimer);
+    if (ctx.watchdogTimer) clearTimeout(ctx.watchdogTimer);
 
     if (ctx.hoveredPartIdx !== null) {
       ctx.hoveredPartIdx = null;
@@ -571,7 +728,6 @@ class SketchfabPoolEngine {
 
     ctx.parts.forEach((p, idx) => {
       if (!positions[idx]) return;
-      // If a part is also a top-level spinRoot and currently rotated, preserve spinAngle
       if (p.isSpinRoot && ctx.spinAngle !== 0 && durationSec === 0) {
         const rootInfo = ctx.spinRoots.find(r => r.instanceID === p.instanceID);
         if (rootInfo) {
@@ -626,7 +782,6 @@ class SketchfabPoolEngine {
     ctx.focusedPartIdx = idx;
     this.clearHover(false);
 
-    // Pure geometry set difference: show target part's geometries, hide every other geometry
     const targetPart = ctx.parts[idx];
     const keepSet = new Set(targetPart.geoIDs || []);
     ctx.allGeometryIDs.forEach(gid => {
@@ -765,6 +920,7 @@ const StudioUI = {
   init() {
     const cfg = window.PortfolioConfig;
     AnimeGridStage.init();
+    CustomCursorHUD.init();
     this.hydrateBrandAndHero(cfg);
     this.engine = new SketchfabPoolEngine();
     this.initCardHighlight();
@@ -801,31 +957,6 @@ const StudioUI = {
     const presetBtn = document.getElementById('btn-explode-preset');
     presetBtn.dataset.val = cfg.explosion.presetPercent;
     presetBtn.textContent = `${cfg.explosion.presetPercent}%`;
-  },
-
-  updatePartTooltip(part, idx, coords) {
-    const tip = document.getElementById('part-tooltip');
-    if (!tip) return;
-    if (!part || idx === null || !coords) {
-      tip.classList.add('opacity-0');
-      return;
-    }
-    document.getElementById('part-tooltip-idx').textContent = `#${String(idx + 1).padStart(2, '0')}`;
-    document.getElementById('part-tooltip-name').textContent = part.name;
-    this.positionTooltip(coords[0], coords[1]);
-    tip.classList.remove('opacity-0');
-  },
-
-  positionTooltip(clientX, clientY) {
-    const tip = document.getElementById('part-tooltip');
-    if (!tip) return;
-    const interCfg = window.PortfolioConfig.interaction;
-    const rect = tip.getBoundingClientRect();
-    const maxX = window.innerWidth - (rect.width || 180) - 12;
-    const maxY = window.innerHeight - (rect.height || 32) - 12;
-    const x = Math.max(12, Math.min(maxX, clientX + interCfg.tooltipOffsetX));
-    const y = Math.max(12, Math.min(maxY, clientY + interCfg.tooltipOffsetY));
-    tip.style.transform = `translate3d(${Math.round(x)}px, ${Math.round(y)}px, 0)`;
   },
 
   updateFocusExitBar(ctx) {
@@ -892,7 +1023,7 @@ const StudioUI = {
         ? `<span class="text-[10px] font-mono text-zinc-400">${(item.loadedPolys / 1000).toFixed(1)}k</span>`
         : `<span class="text-[10px] font-mono text-zinc-600">LOAD</span>`;
       return `
-        <button data-action="select-asset" data-id="${item.id}" class="arch-card w-full text-left rounded-lg px-3 py-2.5 flex flex-col gap-0.5 cursor-pointer ${item.id === this.currentAssetId ? 'active' : ''}">
+        <button data-action="select-asset" data-id="${item.id}" class="arch-card w-full text-left rounded-lg px-3 py-2.5 flex flex-col gap-0.5 ${item.id === this.currentAssetId ? 'active' : ''}">
           <div class="flex items-center justify-between pointer-events-none">
             <span class="text-[10px] font-mono text-[#e05a2b]">${String(idx + 1).padStart(2, '0')}</span>
             ${status}
@@ -919,7 +1050,7 @@ const StudioUI = {
     listEl.innerHTML = ctx.parts.map((p, idx) => {
       const isSelected = ctx.focusedPartIdx === idx;
       return `
-        <button data-action="isolate-part" data-idx="${idx}" class="part-row w-full text-left flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-white/[0.025] border border-white/[0.05] hover:border-[#e05a2b]/60 hover:bg-white/[0.06] text-zinc-300 cursor-pointer ${isSelected ? 'isolated' : ''}">
+        <button data-action="isolate-part" data-idx="${idx}" class="part-row w-full text-left flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-white/[0.025] border border-white/[0.05] hover:border-[#e05a2b]/60 hover:bg-white/[0.06] text-zinc-300 ${isSelected ? 'isolated' : ''}">
           <span class="truncate max-w-[210px] pointer-events-none"><b class="text-zinc-500 mr-1.5">${String(idx + 1).padStart(2, '0')}</b>${p.name}</span>
           <span class="text-[9px] font-mono uppercase pointer-events-none ${isSelected ? 'text-[#e05a2b]' : 'text-zinc-600'}">${isSelected ? 'FOCUSED' : 'ISOLATE'}</span>
         </button>`;
@@ -961,7 +1092,7 @@ const StudioUI = {
     AnimeGridStage.setExplodeProgress(0);
     AnimeGridStage.setAccent(window.PortfolioConfig.theme.accentRGB);
     this.updateFocusExitBar(null);
-    this.updatePartTooltip(null, null, null);
+    CustomCursorHUD.unlockPart(true);
   },
 
   selectAsset(id) {
@@ -978,7 +1109,7 @@ const StudioUI = {
     ).join('');
 
     document.getElementById('workflow-list').innerHTML = asset.workflow.map(w => `
-      <button data-action="workflow-step" data-wf="${w.action}" class="arch-card w-full text-left rounded-lg p-2.5 flex flex-col gap-1 cursor-pointer">
+      <button data-action="workflow-step" data-wf="${w.action}" class="arch-card w-full text-left rounded-lg p-2.5 flex flex-col gap-1">
         <div class="flex items-center justify-between pointer-events-none">
           <span class="text-xs font-medium text-zinc-100"><b class="font-mono text-[#e05a2b] mr-1.5">${w.step}</b>${w.title}</span>
           <span class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-white/[0.06] text-zinc-300">${w.tag}</span>
@@ -1023,15 +1154,18 @@ const StudioUI = {
       document.getElementById('loading-overlay').classList.remove('opacity-0', 'pointer-events-none');
     });
 
-    EventBus.on('engine:isolation-updated', (ctx) => this.renderSubpartList(ctx));
+    EventBus.on('engine:isolation-updated', (ctx) => {
+      CustomCursorHUD.unlockPart(false);
+      this.renderSubpartList(ctx);
+    });
 
     EventBus.on('engine:hover-updated', ({ idx, part, screenCoords, fromList }) => {
       if (!fromList) this.syncSidebarHoverState(idx);
-      this.updatePartTooltip(part, idx, screenCoords);
-    });
-
-    EventBus.on('engine:tooltip-move', (coords) => {
-      if (coords) this.positionTooltip(coords[0], coords[1]);
+      if (part && idx !== null) {
+        CustomCursorHUD.lockOnPart(part, idx, screenCoords);
+      } else {
+        CustomCursorHUD.unlockPart(fromList);
+      }
     });
 
     EventBus.on('engine:ready', (ctx) => {
@@ -1061,7 +1195,7 @@ const StudioUI = {
       }
     });
 
-    // Sidebar list hover -> outline 3D part + show cursor part name tooltip
+    // Sidebar list hover -> outline 3D part + show linked cursor callout (only when not focused)
     const subpartList = document.getElementById('subpart-list');
     if (subpartList) {
       subpartList.addEventListener('mousemove', (e) => {
