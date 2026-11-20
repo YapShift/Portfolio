@@ -1,16 +1,16 @@
 /**
  * YapShift 3D Portfolio Studio — Centralized Configuration (config.js)
- * Native Three.js + GLB Engine Edition.
+ * Native Three.js + GLB Engine · Anime.js Kinetic Edition (v31.0)
  */
 window.PortfolioConfig = {
   brand: {
     name: 'YAPSHIFT',
     archiveTag: '/ 3D ARCHIVE 2026',
     githubUrl: 'https://yapshift.github.io/Portfolio/',
-    heroBadges: ['Hard-Surface Engineering', '5-Level LOD', 'Native WebGL'],
+    heroBadges: ['Hard-Surface Engineering', '5-Level LOD', 'Kinetic WebGL'],
     heroHeadline: 'Precision 3D Assets',
     heroDescription:
-      'Featuring two original production assets: a multi-part Mechanical Suspension Assembly and a 5-Level Stylized Rock LOD pipeline. Powered by a custom native Three.js engine with real Box3 collision-free explosion and 60FPS part inspection.',
+      'Featuring two original production assets: a multi-part Mechanical Suspension Assembly and a 5-Level Stylized Rock LOD pipeline. Powered by a custom native Three.js engine with real Box3 collision-free explosion and Anime.js kinetic choreography.',
     heroFeatures: [
       {
         tag: '01 / ASSEMBLY',
@@ -24,8 +24,8 @@ window.PortfolioConfig = {
       },
       {
         tag: '03 / ENGINE',
-        title: 'Native Three.js Workbench',
-        desc: 'Zero-latency custom reticle & CAD part callouts, Draco-compressed GLB preloading, and click-to-focus isolation.'
+        title: 'Kinetic Three.js Studio',
+        desc: 'Zero-latency reticle callouts, hairline pixel-locked outlines, Draco GLB preloading, and click-to-focus isolation.'
       }
     ],
     footerLeft: 'DESIGNED & MODELED BY YAPSHIFT',
@@ -37,21 +37,22 @@ window.PortfolioConfig = {
     exposure: 1.15,
     envIntensity: 1.0,
     dracoDecoderPath: 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/',
-    screenshotBgHex: '#09090b',
+    screenshotBgHex: '#0b0b0e',
     screenshotWidth: 1920,
     screenshotHeight: 1080
   },
 
   theme: {
-    accentHex: '#e05a2b',
-    accentRGB: '224, 90, 43',
-    wireframeColor: 0xe05a2b,
+    // Signature Anime.js vermilion-coral accent
+    accentHex: '#ff4b4b',
+    accentRGB: '255, 75, 75',
+    wireframeColor: 0xff4b4b,
     clayColor: 0xd4d4d8,
     xrayOpacity: 0.28,
     shaders: [
-      { id: 'rendered', label: 'PBR',       rgb: '224, 90, 43' },
+      { id: 'rendered', label: 'PBR',       rgb: '255, 75, 75' },
       { id: 'clay',     label: 'Clay',      rgb: '212, 212, 216' },
-      { id: 'wire',     label: 'Wireframe', rgb: '224, 90, 43' },
+      { id: 'wire',     label: 'Wireframe', rgb: '255, 75, 75' },
       { id: 'xray',     label: 'X-Ray',     rgb: '148, 163, 184' },
       { id: 'albedo',   label: 'Albedo',    rgb: '228, 228, 231' }
     ]
@@ -77,18 +78,24 @@ window.PortfolioConfig = {
   },
 
   background: {
-    gridSpacing: 40,
+    gridSpacing: 38,
     majorCrosshairStep: 4,
     crosshairBaseSize: 3,
-    dotBaseRadius: 0.85,
-    magneticRadius: 165,
-    magneticPushStrength: 5,
-    majorBaseAlpha: 0.15,
-    minorBaseAlpha: 0.065,
-    hoverAlphaBoost: 0.42,
-    reticleRadiusRatio: 0.30,
-    reticleExplodeExpand: 0.06,
-    frameIntervalMs: 33,
+    dotBaseRadius: 0.9,
+    magneticRadius: 175,
+    magneticPushStrength: 6,
+    majorBaseAlpha: 0.16,
+    minorBaseAlpha: 0.07,
+    hoverAlphaBoost: 0.48,
+    ambientWaveSpeed: 0.0018,
+    ambientWaveFrequency: 0.18,
+    ambientWaveAlphaBoost: 0.06,
+    reticleRadiusRatio: 0.31,
+    reticleExplodeExpand: 0.065,
+    reticleRotationSpeed: 0.00025,
+    shockwaveSpeed: 12,
+    shockwaveMaxRadius: 340,
+    frameIntervalMs: 28,
     maxDevicePixelRatio: 1.5
   },
 
@@ -99,7 +106,6 @@ window.PortfolioConfig = {
   },
 
   explosion: {
-    // Normalized model fits within a 2.0-unit bounding sphere; distances are in normalized world units
     baseSpreadRadius: 0.72,
     hitboxPadding: 1.08,
     solverIterations: 24,
@@ -116,9 +122,11 @@ window.PortfolioConfig = {
   },
 
   interaction: {
-    hoverOutlineColor: 0xe05a2b,
-    hoverOutlineThickness: 0.018,
-    hoverEmissiveIntensity: 0.24,
+    hoverOutlineColor: 0xff4b4b,
+    // Exact screen-space outline thickness in CSS pixels (stays razor-thin at any zoom)
+    hoverOutlinePx: 1.75,
+    hoverOutlineOpacity: 0.92,
+    hoverEmissiveIntensity: 0.14,
     focusFramingMargin: 1.65
   },
 
@@ -130,7 +138,7 @@ window.PortfolioConfig = {
       category: 'MECHANICAL / HARD-SURFACE',
       modelUrl: './models/suspension.glb',
       description:
-        'Precision coilover spring, control arms, hub carrier, and damper assembly. Supports true Box3 AABB collision-resolved explosion, native 60FPS hover callouts, and single-part camera focus.',
+        'Precision coilover spring, control arms, hub carrier, and damper assembly. Supports true Box3 AABB collision-resolved explosion, razor-thin pixel outlines, and single-part camera focus.',
       tags: ['Hard-Surface', 'Multi-Part', 'PBR Metal'],
       workflow: [
         {
@@ -171,7 +179,7 @@ window.PortfolioConfig = {
           title: '5-Tier Topology Wireframe',
           tag: 'WIRE',
           action: 'wire',
-          desc: 'Overlays copper wireframe to compare triangle density across all 5 LOD stages.'
+          desc: 'Overlays vermilion wireframe to compare triangle density across all 5 LOD stages.'
         },
         {
           step: '02',
