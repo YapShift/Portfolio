@@ -1,6 +1,6 @@
 /**
  * YapShift 3D Portfolio Studio — Centralized Configuration (config.js)
- * Native Three.js + GLB Engine · Anime.js Kinetic Edition (v31.0)
+ * Native Three.js + GLB Engine · Silhouette Mask Outline & Kinetic 3D Motion (v32.0)
  */
 window.PortfolioConfig = {
   brand: {
@@ -10,12 +10,12 @@ window.PortfolioConfig = {
     heroBadges: ['Hard-Surface Engineering', '5-Level LOD', 'Kinetic WebGL'],
     heroHeadline: 'Precision 3D Assets',
     heroDescription:
-      'Featuring two original production assets: a multi-part Mechanical Suspension Assembly and a 5-Level Stylized Rock LOD pipeline. Powered by a custom native Three.js engine with real Box3 collision-free explosion and Anime.js kinetic choreography.',
+      'Featuring two original production assets: a multi-part Mechanical Suspension Assembly and a 5-Level Stylized Rock LOD pipeline. Powered by a custom native Three.js engine with real Box3 explosion, X-Ray safe silhouette outlines, and spring-physics model choreography.',
     heroFeatures: [
       {
         tag: '01 / ASSEMBLY',
         title: 'Mechanical Suspension',
-        desc: 'Precision multi-part hard-surface assembly with real Box3 AABB collision-resolved radial & linear exploded views.'
+        desc: 'Precision multi-part hard-surface assembly with staggered spring explosion and real Box3 collision avoidance.'
       },
       {
         tag: '02 / OPTIMIZATION',
@@ -25,7 +25,7 @@ window.PortfolioConfig = {
       {
         tag: '03 / ENGINE',
         title: 'Kinetic Three.js Studio',
-        desc: 'Zero-latency reticle callouts, hairline pixel-locked outlines, Draco GLB preloading, and click-to-focus isolation.'
+        desc: 'Screen-space silhouette mask outlines (X-Ray compatible), spring hover physics, and click-to-focus isolation.'
       }
     ],
     footerLeft: 'DESIGNED & MODELED BY YAPSHIFT',
@@ -34,8 +34,16 @@ window.PortfolioConfig = {
 
   renderer: {
     maxPixelRatio: 2,
-    exposure: 1.15,
-    envIntensity: 1.0,
+    // Balanced dark-studio contrast so untextured models never blow out to pure white
+    exposure: 0.86,
+    envIntensity: 0.52,
+    keyLightIntensity: 0.85,
+    rimLightIntensity: 0.55,
+    hemiLightIntensity: 0.22,
+    // Automatically tint untextured pure-white (#ffffff) GLB meshes to matte titanium grey (set null to disable)
+    untexturedTintHex: '#9aa0aa',
+    untexturedRoughness: 0.56,
+    untexturedMetalness: 0.14,
     dracoDecoderPath: 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/',
     screenshotBgHex: '#0b0b0e',
     screenshotWidth: 1920,
@@ -43,11 +51,13 @@ window.PortfolioConfig = {
   },
 
   theme: {
-    // Signature Anime.js vermilion-coral accent
     accentHex: '#ff4b4b',
     accentRGB: '255, 75, 75',
     wireframeColor: 0xff4b4b,
-    clayColor: 0xd4d4d8,
+    // Sculptural slate-grey clay for crisp bevel contrast
+    clayColor: 0x8c919b,
+    clayRoughness: 0.62,
+    clayMetalness: 0.12,
     xrayOpacity: 0.28,
     shaders: [
       { id: 'rendered', label: 'PBR',       rgb: '255, 75, 75' },
@@ -56,6 +66,26 @@ window.PortfolioConfig = {
       { id: 'xray',     label: 'X-Ray',     rgb: '148, 163, 184' },
       { id: 'albedo',   label: 'Albedo',    rgb: '228, 228, 231' }
     ]
+  },
+
+  // Anime.js-inspired 3D kinetic model dynamics
+  modelMotion: {
+    // Subtle weightless idle levitation
+    idleFloatEnabled: true,
+    idleFloatAmplitude: 0.022,
+    idleFloatSpeed: 1.5,
+    // Staggered spring assembly when model appears/switches
+    assemblyEntranceEnabled: true,
+    assemblyDurationMs: 820,
+    assemblyStaggerSpanMs: 260,
+    assemblyDropOffset: 0.22,
+    // Spring scale micro-pop on hovered part
+    hoverPopScale: 1.028,
+    hoverSpringStiffness: 260,
+    hoverSpringDamping: 18,
+    // Staggered wave & elastic overshoot during preset explosion buttons
+    explodeWaveStaggerMs: 180,
+    explodeOvershoot: 1.25
   },
 
   cursor: {
@@ -114,19 +144,18 @@ window.PortfolioConfig = {
     linearGapMultiplier: 0.22,
     linearOffAxisPull: 0.55,
     presetPercent: 65,
-    buttonDurationMs: 650,
+    buttonDurationMs: 720,
     sliderReleaseDurationMs: 420,
-    modeSwitchDurationMs: 550,
+    modeSwitchDurationMs: 600,
     cameraZoomRadial: 0.24,
     cameraZoomLinear: 0.42
   },
 
   interaction: {
+    // Screen-space silhouette mask outline (100% X-Ray compatible, zero interior bleed)
     hoverOutlineColor: 0xff4b4b,
-    // Exact screen-space outline thickness in CSS pixels (stays razor-thin at any zoom)
-    hoverOutlinePx: 1.75,
-    hoverOutlineOpacity: 0.92,
-    hoverEmissiveIntensity: 0.14,
+    hoverOutlinePx: 1.6,
+    hoverOutlineOpacity: 0.95,
     focusFramingMargin: 1.65
   },
 
@@ -138,7 +167,7 @@ window.PortfolioConfig = {
       category: 'MECHANICAL / HARD-SURFACE',
       modelUrl: './models/suspension.glb',
       description:
-        'Precision coilover spring, control arms, hub carrier, and damper assembly. Supports true Box3 AABB collision-resolved explosion, razor-thin pixel outlines, and single-part camera focus.',
+        'Precision coilover spring, control arms, hub carrier, and damper assembly. Supports true Box3 collision-free staggered explosion, X-Ray safe silhouette outlines, and single-part focus.',
       tags: ['Hard-Surface', 'Multi-Part', 'PBR Metal'],
       workflow: [
         {
@@ -146,7 +175,7 @@ window.PortfolioConfig = {
           title: 'Radial 3D Exploded View',
           tag: '65%',
           action: 'explode-radial',
-          desc: 'Separates components along natural assembly vectors with real 3D Box3 collision avoidance.'
+          desc: 'Cascades components along natural assembly vectors with real Box3 collision avoidance.'
         },
         {
           step: '02',
@@ -160,7 +189,7 @@ window.PortfolioConfig = {
           title: 'X-Ray Internal Inspection',
           tag: 'X-RAY',
           action: 'xray',
-          desc: 'Switches outer housing to translucent alpha-blend to reveal internal piston and bushing fitment.'
+          desc: 'Switches outer housing to translucent alpha-blend with clean silhouette-only hover contours.'
         }
       ]
     },
@@ -186,7 +215,7 @@ window.PortfolioConfig = {
           title: 'Matcap Clay Normal Check',
           tag: 'CLAY',
           action: 'clay',
-          desc: 'Strips base color to evaluate normal map bevel retention and silhouette consistency under pure shading.'
+          desc: 'Applies dark sculptural clay to evaluate normal map bevel retention and silhouette consistency.'
         },
         {
           step: '03',
