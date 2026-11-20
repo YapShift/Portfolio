@@ -6,8 +6,9 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <title>YAPSHIFT — 3D Industrial & Technical Art Portfolio</title>
+  <title>YAPSHIFT — Kinetic 3D Industrial & Technical Art Portfolio</title>
   <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/animejs@3.2.2/lib/anime.min.js"></script>
 
   <!-- Three.js r170 ES Module Import Map -->
   <script type="importmap">
@@ -20,21 +21,22 @@
   </script>
 
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap');
 
     :root {
-      --bg-obsidian: #09090b;
-      --surface: rgba(16, 16, 20, 0.88);
-      --surface-hover: rgba(28, 28, 34, 0.92);
-      --border-hairline: rgba(255, 255, 255, 0.08);
-      --border-active: rgba(224, 90, 43, 0.65);
-      --accent: #e05a2b;
+      --bg-obsidian: #0b0b0e;
+      --surface: rgba(17, 17, 22, 0.88);
+      --surface-hover: rgba(28, 28, 36, 0.94);
+      --border-hairline: rgba(255, 255, 255, 0.085);
+      --border-active: rgba(255, 75, 75, 0.65);
+      --accent: #ff4b4b;
+      --accent-soft: rgba(255, 75, 75, 0.14);
       --text-primary: #f4f4f5;
 
-      /* Exclusive custom SVG hardware cursors active natively over 100% of the WebGL canvas */
-      --cursor-default: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='%23f4f4f5' stroke-width='1.4'%3E%3Cpath d='M12 4v5M12 15v5M4 12h5M15 12h5' stroke-opacity='0.88'/%3E%3C/g%3E%3Ccircle cx='12' cy='12' r='1.6' fill='%23e05a2b'/%3E%3C/svg%3E") 12 12, crosshair;
-      --cursor-pointer: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M12 5l7 7-7 7-7-7z' fill='rgba(224,90,43,0.18)' stroke='%23e05a2b' stroke-width='1.5'/%3E%3Ccircle cx='12' cy='12' r='1.8' fill='%23ffffff'/%3E%3C/svg%3E") 12 12, pointer;
-      --cursor-grabbing: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='6' fill='rgba(224,90,43,0.15)' stroke='%23e05a2b' stroke-width='1.5' stroke-dasharray='3 2'/%3E%3Ccircle cx='12' cy='12' r='2' fill='%23ffffff'/%3E%3C/svg%3E") 12 12, grabbing;
+      /* Exclusive Anime.js-inspired precision SVG hardware cursors */
+      --cursor-default: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='%23f4f4f5' stroke-width='1.35'%3E%3Cpath d='M12 4v5M12 15v5M4 12h5M15 12h5' stroke-opacity='0.9'/%3E%3C/g%3E%3Ccircle cx='12' cy='12' r='1.6' fill='%23ff4b4b'/%3E%3C/svg%3E") 12 12, crosshair;
+      --cursor-pointer: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M12 5l7 7-7 7-7-7z' fill='rgba(255,75,75,0.2)' stroke='%23ff4b4b' stroke-width='1.5'/%3E%3Ccircle cx='12' cy='12' r='1.8' fill='%23ffffff'/%3E%3C/svg%3E") 12 12, pointer;
+      --cursor-grabbing: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='6' fill='rgba(255,75,75,0.16)' stroke='%23ff4b4b' stroke-width='1.5' stroke-dasharray='3 2'/%3E%3Ccircle cx='12' cy='12' r='2' fill='%23ffffff'/%3E%3C/svg%3E") 12 12, grabbing;
     }
 
     * { box-sizing: border-box; }
@@ -44,7 +46,7 @@
       height: 100vh;
       overflow: hidden;
       background-color: var(--bg-obsidian);
-      background-image: radial-gradient(circle at 50% 45%, #16161b 0%, #09090b 65%, #050506 100%);
+      background-image: radial-gradient(circle at 50% 45%, #17171f 0%, #0b0b0e 65%, #060608 100%);
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
       color: var(--text-primary);
       user-select: none;
@@ -72,41 +74,41 @@
     .arch-panel {
       background: var(--surface);
       border: 1px solid var(--border-hairline);
-      box-shadow: 0 20px 44px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+      box-shadow: 0 20px 44px rgba(0, 0, 0, 0.58), inset 0 1px 0 rgba(255, 255, 255, 0.045);
     }
 
     .arch-card {
       position: relative;
       overflow: hidden;
-      background: rgba(24, 24, 29, 0.65);
+      background: rgba(24, 24, 31, 0.65);
       border: 1px solid var(--border-hairline);
-      transition: border-color 0.2s ease, background-color 0.2s ease;
+      transition: border-color 0.2s ease, background-color 0.2s ease, transform 0.2s ease;
     }
     .arch-card::before {
       content: '';
       position: absolute;
       inset: 0;
-      background: radial-gradient(200px circle at var(--mouse-x, -500px) var(--mouse-y, -500px), rgba(255, 255, 255, 0.06), transparent 70%);
+      background: radial-gradient(210px circle at var(--mouse-x, -500px) var(--mouse-y, -500px), rgba(255, 75, 75, 0.10), transparent 70%);
       pointer-events: none;
     }
     .arch-card:hover {
       background: var(--surface-hover);
-      border-color: rgba(255, 255, 255, 0.18);
+      border-color: rgba(255, 255, 255, 0.2);
     }
     .arch-card.active {
-      background: rgba(224, 90, 43, 0.08);
+      background: rgba(255, 75, 75, 0.09);
       border-color: var(--border-active);
     }
 
     .cta-monolith {
       background: #f4f4f5;
-      color: #09090b;
+      color: #0b0b0e;
       transition: transform 0.25s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.25s ease, box-shadow 0.25s ease;
     }
     .cta-monolith:hover {
-      transform: translateY(-1px);
+      transform: translateY(-2px);
       background: #ffffff;
-      box-shadow: 0 12px 32px rgba(255, 255, 255, 0.14);
+      box-shadow: 0 12px 34px rgba(255, 75, 75, 0.25);
     }
 
     input[type="range"].arch-slider {
@@ -123,25 +125,26 @@
       width: 11px;
       height: 11px;
       border-radius: 50%;
-      background: #f4f4f5;
+      background: #ffffff;
       border: 2px solid var(--accent);
+      box-shadow: 0 0 10px rgba(255, 75, 75, 0.5);
       cursor: var(--cursor-pointer);
       transition: transform 0.15s ease;
     }
     input[type="range"].arch-slider::-webkit-slider-thumb:hover {
-      transform: scale(1.2);
+      transform: scale(1.25);
     }
     input[type="range"].arch-slider:disabled { opacity: 0.25; cursor: not-allowed !important; }
 
     .part-row { transition: all 0.16s ease; }
     .part-row.isolated {
-      background: rgba(224, 90, 43, 0.15);
-      border-color: rgba(224, 90, 43, 0.65);
+      background: rgba(255, 75, 75, 0.16);
+      border-color: rgba(255, 75, 75, 0.7);
       color: #ffffff;
     }
     .part-row.hovered-sync {
-      background: rgba(224, 90, 43, 0.12);
-      border-color: rgba(224, 90, 43, 0.75);
+      background: rgba(255, 75, 75, 0.13);
+      border-color: rgba(255, 75, 75, 0.78);
       color: #ffffff;
     }
 
@@ -182,8 +185,8 @@
       height: 32px;
       margin-left: -16px;
       margin-top: -16px;
-      border-color: rgba(224, 90, 43, 0.7);
-      background-color: rgba(224, 90, 43, 0.06);
+      border-color: rgba(255, 75, 75, 0.75);
+      background-color: rgba(255, 75, 75, 0.06);
     }
 
     #yapshift-cursor-hud.is-dragging .cursor-reticle {
@@ -191,19 +194,19 @@
       height: 36px;
       margin-left: -18px;
       margin-top: -18px;
-      border-color: rgba(224, 90, 43, 0.85);
+      border-color: rgba(255, 75, 75, 0.9);
       border-style: dashed;
     }
 
     #yapshift-cursor-hud.is-part-lock .cursor-reticle {
-      width: 28px;
-      height: 28px;
-      margin-left: -14px;
-      margin-top: -14px;
+      width: 26px;
+      height: 26px;
+      margin-left: -13px;
+      margin-top: -13px;
       border-radius: 4px;
-      border-color: #e05a2b;
-      background-color: rgba(224, 90, 43, 0.14);
-      box-shadow: 0 0 16px rgba(224, 90, 43, 0.35);
+      border-color: var(--accent);
+      background-color: rgba(255, 75, 75, 0.14);
+      box-shadow: 0 0 18px rgba(255, 75, 75, 0.4);
       transform: rotate(45deg);
     }
 
@@ -215,7 +218,7 @@
       display: flex;
       align-items: center;
       opacity: 0;
-      transition: opacity 0.15s ease, transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+      transition: opacity 0.14s ease, transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
     }
 
     #yapshift-cursor-hud.is-part-lock .cursor-callout {
@@ -236,14 +239,14 @@
     .cursor-leader-line {
       width: 18px;
       height: 1px;
-      background: linear-gradient(90deg, #e05a2b, rgba(224, 90, 43, 0.45));
+      background: linear-gradient(90deg, var(--accent), rgba(255, 75, 75, 0.45));
       flex-shrink: 0;
     }
 
     .cursor-badge {
       background: rgba(12, 12, 16, 0.94);
-      border: 1px solid rgba(224, 90, 43, 0.65);
-      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.65);
+      border: 1px solid rgba(255, 75, 75, 0.65);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.68);
       border-radius: 6px;
       padding: 4px 10px;
       display: flex;
@@ -253,12 +256,12 @@
     }
 
     ::-webkit-scrollbar { width: 3px; }
-    ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.15); border-radius: 99px; }
+    ::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.16); border-radius: 99px; }
   </style>
 </head>
 <body class="relative">
 
-  <!-- Precision interactive dot/crosshair matrix & breathing reticle canvas -->
+  <!-- Kinetic staggered-wave dot matrix, shockwaves & counter-rotating orbital reticle canvas -->
   <canvas id="anime-bg-canvas" class="fixed inset-0 w-full h-full pointer-events-none z-0"></canvas>
 
   <!-- Native Fullscreen Three.js WebGL Viewport -->
@@ -270,7 +273,7 @@
     <div class="cursor-callout">
       <div class="cursor-leader-line"></div>
       <div class="cursor-badge font-mono text-[11px]">
-        <span id="cursor-part-idx" class="text-[#e05a2b] font-semibold"></span>
+        <span id="cursor-part-idx" class="text-[#ff4b4b] font-semibold"></span>
         <span id="cursor-part-name" class="text-zinc-100 font-medium"></span>
       </div>
     </div>
@@ -278,26 +281,26 @@
 
   <!-- Floating top-center exit bar during single-part focus -->
   <div id="focus-exit-bar" class="fixed top-6 left-1/2 -translate-x-1/2 z-30 arch-panel rounded-full pl-4 pr-2 py-1.5 flex items-center gap-3 text-xs font-mono transition-all duration-300 opacity-0 pointer-events-none -translate-y-2">
-    <span class="w-1.5 h-1.5 rounded-full bg-[#e05a2b]"></span>
+    <span class="w-1.5 h-1.5 rounded-full bg-[#ff4b4b] animate-pulse"></span>
     <span id="focus-part-label" class="text-zinc-200 max-w-[240px] truncate"></span>
-    <button data-action="show-all-parts" class="px-3 py-1 rounded-full bg-[#e05a2b] hover:bg-[#f06736] text-white text-[10px] font-semibold tracking-wider uppercase transition">
+    <button data-action="show-all-parts" class="px-3 py-1 rounded-full bg-[#ff4b4b] hover:bg-[#ff6262] text-white text-[10px] font-semibold tracking-wider uppercase transition">
       ✕ Exit Focus (ESC)
     </button>
   </div>
 
   <!-- =========================================================
-       STAGE 01: Showreel Intro Overlay
+       STAGE 01: Kinetic Showreel Intro Overlay
        ========================================================= -->
-  <div id="hero-overlay" class="fixed inset-0 z-50 flex flex-col justify-between p-8 md:p-12 bg-[#09090b]/82 transition-all duration-500">
-    <div class="flex items-center justify-between border-b border-white/[0.08] pb-5">
+  <div id="hero-overlay" class="fixed inset-0 z-50 flex flex-col justify-between p-8 md:p-12 bg-[#0b0b0e]/84 transition-all duration-500">
+    <div class="hero-stagger flex items-center justify-between border-b border-white/[0.08] pb-5">
       <div class="flex items-center gap-3">
-        <span class="w-2 h-2 rounded-full bg-[#e05a2b]"></span>
+        <span class="w-2 h-2 rounded-full bg-[#ff4b4b] shadow-[0_0_10px_#ff4b4b]"></span>
         <span id="hero-brand-name" class="font-display text-sm font-semibold tracking-[0.22em] text-zinc-100">YAPSHIFT</span>
         <span id="hero-archive-tag" class="text-[10px] font-mono text-zinc-500 tracking-widest">/ 3D ARCHIVE 2026</span>
       </div>
       <div class="flex items-center gap-6 text-[11px] font-mono">
         <span id="hero-preload-status" class="flex items-center gap-2 text-zinc-400">
-          <span class="w-1.5 h-1.5 rounded-full bg-[#e05a2b] animate-pulse"></span>
+          <span class="w-1.5 h-1.5 rounded-full bg-[#ff4b4b] animate-pulse"></span>
           <span>PRELOADING ASSETS (0/2)</span>
         </span>
         <a id="hero-github-link" href="https://yapshift.github.io/Portfolio/" target="_blank" class="text-zinc-400 hover:text-white transition">GITHUB ↗</a>
@@ -306,16 +309,16 @@
 
     <div class="max-w-4xl mx-auto w-full my-auto space-y-10">
       <div class="space-y-4 text-center">
-        <div id="hero-badges" class="inline-flex items-center gap-2.5 px-3.5 py-1 rounded-full border border-white/10 bg-white/[0.03] text-[10px] font-mono tracking-[0.2em] text-zinc-400 uppercase"></div>
-        <h1 class="font-display text-5xl md:text-7xl font-semibold tracking-[-0.03em] text-white leading-[1.02]">
-          <span id="hero-headline">Precision 3D Assets</span><span class="text-[#e05a2b]">.</span>
+        <div id="hero-badges" class="hero-stagger inline-flex items-center gap-2.5 px-3.5 py-1 rounded-full border border-white/10 bg-white/[0.03] text-[10px] font-mono tracking-[0.2em] text-zinc-400 uppercase"></div>
+        <h1 class="hero-stagger font-display text-5xl md:text-7xl font-semibold tracking-[-0.03em] text-white leading-[1.02]">
+          <span id="hero-headline">Precision 3D Assets</span><span class="text-[#ff4b4b]">.</span>
         </h1>
-        <p id="hero-desc" class="max-w-xl mx-auto text-sm text-zinc-400 leading-relaxed"></p>
+        <p id="hero-desc" class="hero-stagger max-w-xl mx-auto text-sm text-zinc-400 leading-relaxed"></p>
       </div>
 
       <div id="hero-features" class="grid grid-cols-1 md:grid-cols-3 gap-4"></div>
 
-      <div class="flex justify-center pt-2">
+      <div class="hero-stagger flex justify-center pt-2">
         <button data-action="close-hero" class="cta-monolith px-8 py-3.5 rounded-full text-xs font-mono font-semibold tracking-[0.15em] uppercase flex items-center gap-3">
           <span>Enter Workbench</span>
           <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
@@ -323,7 +326,7 @@
       </div>
     </div>
 
-    <div class="flex items-center justify-between border-t border-white/[0.08] pt-4 text-[10px] font-mono text-zinc-500 tracking-wider">
+    <div class="hero-stagger flex items-center justify-between border-t border-white/[0.08] pt-4 text-[10px] font-mono text-zinc-500 tracking-wider">
       <span id="hero-footer-left">DESIGNED &amp; MODELED BY YAPSHIFT</span>
       <span id="hero-footer-right">SUSPENSION ASSEMBLY · STYLIZED ROCK 5-LOD</span>
     </div>
@@ -332,16 +335,16 @@
   <!-- =========================================================
        STAGE 02: Fullscreen 3D Workbench HUD
        ========================================================= -->
-  <div id="loading-overlay" class="fixed inset-0 z-[18] bg-[#09090b]/82 flex flex-col items-center justify-center gap-3 transition-opacity duration-300 opacity-0 pointer-events-none px-6 text-center">
-    <div id="loading-spinner" class="w-7 h-7 border-[1.5px] border-[#e05a2b] border-t-transparent rounded-full animate-spin"></div>
+  <div id="loading-overlay" class="fixed inset-0 z-[18] bg-[#0b0b0e]/82 flex flex-col items-center justify-center gap-3 transition-opacity duration-300 opacity-0 pointer-events-none px-6 text-center">
+    <div id="loading-spinner" class="w-7 h-7 border-[1.5px] border-[#ff4b4b] border-t-transparent rounded-full animate-spin"></div>
     <div id="loading-text" class="text-[11px] font-mono tracking-[0.18em] text-zinc-400">LOADING GLB MODEL</div>
   </div>
 
   <!-- Top-Left: Brand & Asset Switcher -->
-  <aside class="fixed top-6 left-6 z-20 w-64 flex flex-col gap-2.5">
+  <aside class="hud-stagger fixed top-6 left-6 z-20 w-64 flex flex-col gap-2.5">
     <div class="arch-panel rounded-xl px-4 py-3 flex items-center justify-between">
       <div class="flex items-center gap-2.5">
-        <span class="w-2 h-2 rounded-full bg-[#e05a2b]"></span>
+        <span class="w-2 h-2 rounded-full bg-[#ff4b4b] shadow-[0_0_8px_#ff4b4b]"></span>
         <span id="top-brand-name" class="font-display text-sm font-semibold tracking-[0.18em] text-white">YAPSHIFT</span>
       </div>
       <button data-action="open-hero" class="text-[10px] font-mono text-zinc-400 hover:text-white px-2 py-0.5 rounded border border-white/10 hover:border-white/25 transition">
@@ -358,11 +361,21 @@
     </div>
   </aside>
 
+  <!-- Bottom-Left: Live Anime.js-style Camera Telemetry Readout -->
+  <div class="hud-stagger fixed bottom-6 left-6 z-20 hidden lg:flex items-center gap-3 arch-panel rounded-xl px-3.5 py-2 text-[10px] font-mono text-zinc-400">
+    <span class="w-1.5 h-1.5 rounded-full bg-[#ff4b4b]"></span>
+    <span>AZ <b id="telemetry-az" class="text-zinc-200 ml-0.5">000°</b></span>
+    <span class="text-zinc-700">|</span>
+    <span>EL <b id="telemetry-el" class="text-zinc-200 ml-0.5">+00°</b></span>
+    <span class="text-zinc-700">|</span>
+    <span>DIST <b id="telemetry-dist" class="text-zinc-200 ml-0.5">3.20</b></span>
+  </div>
+
   <!-- Top-Right: Turntable, HDRI Light, Recenter, Capture & Inspector Toggle -->
-  <div class="fixed top-6 right-6 z-20 flex items-center gap-2">
+  <div class="hud-stagger fixed top-6 right-6 z-20 flex items-center gap-2">
     <div class="arch-panel rounded-xl px-3 py-1.5 flex items-center gap-3 text-[11px] font-mono">
       <button id="btn-orbit" data-action="toggle-orbit" class="flex items-center gap-1.5 text-zinc-200 hover:text-white transition" title="In-place model turntable (pauses while moving camera, auto-resumes)">
-        <span class="w-1.5 h-1.5 rounded-full bg-[#e05a2b]"></span>
+        <span class="w-1.5 h-1.5 rounded-full bg-[#ff4b4b]"></span>
         <span>SPIN: ON</span>
       </button>
 
@@ -392,9 +405,9 @@
   </div>
 
   <!-- Right Floating Inspector Drawer -->
-  <aside id="drawer-panel" class="fixed top-20 right-6 bottom-24 z-20 w-[332px] arch-panel rounded-2xl p-4 flex flex-col gap-4 overflow-y-auto transition-all duration-300">
+  <aside id="drawer-panel" class="hud-stagger fixed top-20 right-6 bottom-24 z-20 w-[332px] arch-panel rounded-2xl p-4 flex flex-col gap-4 overflow-y-auto transition-all duration-300">
     <div>
-      <div id="spec-category" class="text-[10px] font-mono text-[#e05a2b] tracking-widest uppercase"></div>
+      <div id="spec-category" class="text-[10px] font-mono text-[#ff4b4b] tracking-widest uppercase"></div>
       <h2 id="spec-title" class="font-display text-lg font-semibold text-white mt-1 leading-snug"></h2>
       <p id="spec-desc" class="text-xs text-zinc-400 mt-1.5 leading-relaxed"></p>
       <div id="spec-tags" class="flex flex-wrap gap-1.5 mt-2.5"></div>
@@ -426,7 +439,7 @@
           <span class="text-[10px] font-mono text-zinc-400 tracking-widest uppercase">Part Isolation</span>
           <span id="spec-collision-badge" class="text-[9px] font-mono px-1.5 py-0.5 rounded bg-white/[0.05] text-zinc-400"></span>
         </div>
-        <button id="btn-show-all" data-action="show-all-parts" class="hidden text-[10px] font-mono text-[#e05a2b] hover:underline uppercase">
+        <button id="btn-show-all" data-action="show-all-parts" class="hidden text-[10px] font-mono text-[#ff4b4b] hover:underline uppercase">
           Show All
         </button>
       </div>
@@ -436,7 +449,7 @@
   </aside>
 
   <!-- Bottom-Center Floating Control Dock -->
-  <footer class="fixed bottom-6 left-1/2 -translate-x-1/2 z-20 arch-panel rounded-2xl px-4 py-2.5 flex items-center gap-4 max-w-[95vw] overflow-x-auto">
+  <footer class="hud-stagger fixed bottom-6 left-1/2 -translate-x-1/2 z-20 arch-panel rounded-2xl px-4 py-2.5 flex items-center gap-4 max-w-[95vw] overflow-x-auto">
     <div id="shader-toolbar" class="flex items-center gap-1 text-[11px] font-mono shrink-0"></div>
 
     <div class="w-[1px] h-4 bg-white/10 shrink-0"></div>
@@ -452,7 +465,7 @@
 
       <div class="flex items-center gap-1 text-[10px] font-mono">
         <button data-action="explode-to" data-val="0" class="px-2 py-1 rounded-md bg-white/[0.04] hover:bg-white/10 text-zinc-400 hover:text-white transition">0%</button>
-        <button id="btn-explode-preset" data-action="explode-to" data-val="65" class="px-2 py-1 rounded-md bg-[#e05a2b]/20 hover:bg-[#e05a2b]/35 text-[#ff8b60] transition">65%</button>
+        <button id="btn-explode-preset" data-action="explode-to" data-val="65" class="px-2 py-1 rounded-md bg-[#ff4b4b]/20 hover:bg-[#ff4b4b]/35 text-[#ff8585] transition">65%</button>
       </div>
     </div>
   </footer>
