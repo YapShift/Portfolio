@@ -20,10 +20,14 @@
       --border-active: rgba(224, 90, 43, 0.65);
       --accent: #e05a2b;
       --text-primary: #f4f4f5;
+
+      /* Exclusive custom SVG hardware cursors (zero latency precision crosshair & active copper diamond) */
+      --cursor-default: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='%23f4f4f5' stroke-width='1.4'%3E%3Cpath d='M12 4v5M12 15v5M4 12h5M15 12h5' stroke-opacity='0.85'/%3E%3C/g%3E%3Ccircle cx='12' cy='12' r='1.6' fill='%23e05a2b'/%3E%3C/svg%3E") 12 12, crosshair;
+      --cursor-pointer: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M12 5l7 7-7 7-7-7z' fill='rgba(224,90,43,0.18)' stroke='%23e05a2b' stroke-width='1.5'/%3E%3Ccircle cx='12' cy='12' r='1.8' fill='%23ffffff'/%3E%3C/svg%3E") 12 12, pointer;
     }
 
     * { box-sizing: border-box; }
-    body {
+    html, body {
       margin: 0;
       width: 100vw;
       height: 100vh;
@@ -33,13 +37,17 @@
       font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
       color: var(--text-primary);
       user-select: none;
+      cursor: var(--cursor-default);
       -webkit-font-smoothing: antialiased;
+    }
+
+    button, a, input[type="range"], [data-action] {
+      cursor: var(--cursor-pointer) !important;
     }
 
     .font-display { font-family: 'Space Grotesk', sans-serif; }
     .font-mono { font-family: 'JetBrains Mono', monospace; }
 
-    /* High-FPS architectural dark glass without heavy WebGL backdrop blur */
     .arch-panel {
       background: var(--surface);
       border: 1px solid var(--border-hairline);
@@ -96,13 +104,13 @@
       border-radius: 50%;
       background: #f4f4f5;
       border: 2px solid var(--accent);
-      cursor: pointer;
+      cursor: var(--cursor-pointer);
       transition: transform 0.15s ease;
     }
     input[type="range"].arch-slider::-webkit-slider-thumb:hover {
       transform: scale(1.2);
     }
-    input[type="range"].arch-slider:disabled { opacity: 0.25; cursor: not-allowed; }
+    input[type="range"].arch-slider:disabled { opacity: 0.25; cursor: not-allowed !important; }
 
     .part-row { transition: all 0.16s ease; }
     .part-row.isolated {
@@ -114,6 +122,108 @@
       background: rgba(224, 90, 43, 0.12);
       border-color: rgba(224, 90, 43, 0.75);
       color: #ffffff;
+    }
+
+    /* =========================================================
+       Exclusive Tactical Cursor Follower & Linked CAD Part Callout
+       ========================================================= */
+    #yapshift-cursor-hud {
+      position: fixed;
+      top: 0;
+      left: 0;
+      z-index: 9999;
+      pointer-events: none;
+      will-change: transform, opacity;
+      transition: opacity 0.18s ease;
+    }
+
+    .cursor-reticle {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 22px;
+      height: 22px;
+      margin-left: -11px;
+      margin-top: -11px;
+      border-radius: 50%;
+      border: 1px solid rgba(244, 244, 245, 0.28);
+      transition: width 0.2s cubic-bezier(0.22, 1, 0.36, 1),
+                  height 0.2s cubic-bezier(0.22, 1, 0.36, 1),
+                  margin 0.2s cubic-bezier(0.22, 1, 0.36, 1),
+                  border-radius 0.2s ease,
+                  border-color 0.2s ease,
+                  background-color 0.2s ease,
+                  transform 0.25s ease;
+    }
+
+    /* State: Hovering UI buttons / controls */
+    #yapshift-cursor-hud.is-interactive .cursor-reticle {
+      width: 32px;
+      height: 32px;
+      margin-left: -16px;
+      margin-top: -16px;
+      border-color: rgba(224, 90, 43, 0.7);
+      background-color: rgba(224, 90, 43, 0.06);
+    }
+
+    /* State: Target-Lock on a 3D Part (morphs circle into precision CAD target bracket) */
+    #yapshift-cursor-hud.is-part-lock .cursor-reticle {
+      width: 28px;
+      height: 28px;
+      margin-left: -14px;
+      margin-top: -14px;
+      border-radius: 4px;
+      border-color: #e05a2b;
+      background-color: rgba(224, 90, 43, 0.14);
+      box-shadow: 0 0 16px rgba(224, 90, 43, 0.35);
+      transform: rotate(45deg);
+    }
+
+    /* Linked CAD Callout Wing (extends directly out of the cursor reticle) */
+    .cursor-callout {
+      position: absolute;
+      top: 0;
+      left: 16px;
+      transform: translateY(-50%) translateX(-6px);
+      display: flex;
+      align-items: center;
+      opacity: 0;
+      transition: opacity 0.16s ease, transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    #yapshift-cursor-hud.is-part-lock .cursor-callout {
+      opacity: 1;
+      transform: translateY(-50%) translateX(0);
+    }
+
+    /* Auto-flip callout to the LEFT side when near right screen edge */
+    #yapshift-cursor-hud.flip-left .cursor-callout {
+      left: auto;
+      right: 16px;
+      flex-direction: row-reverse;
+      transform: translateY(-50%) translateX(6px);
+    }
+    #yapshift-cursor-hud.is-part-lock.flip-left .cursor-callout {
+      transform: translateY(-50%) translateX(0);
+    }
+
+    .cursor-leader-line {
+      width: 18px;
+      height: 1px;
+      background: linear-gradient(90deg, #e05a2b, rgba(224, 90, 43, 0.45));
+      flex-shrink: 0;
+    }
+
+    .cursor-badge {
+      background: rgba(12, 12, 16, 0.94);
+      border: 1px solid rgba(224, 90, 43, 0.65);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.65);
+      border-radius: 6px;
+      padding: 4px 10px;
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      white-space: nowrap;
     }
 
     ::-webkit-scrollbar { width: 3px; }
@@ -128,18 +238,23 @@
   <!-- Fullscreen multi-iframe parallel WebGL cache pool -->
   <div id="sketchfab-viewport-pool" class="fixed inset-0 w-full h-full z-10"></div>
 
-  <!-- Floating cursor tooltip for hovered 3D part name -->
-  <div id="part-tooltip" class="fixed top-0 left-0 z-40 pointer-events-none opacity-0 transition-opacity duration-150 arch-panel rounded-lg px-2.5 py-1.5 flex items-center gap-2 text-xs font-mono shadow-2xl" style="transform: translate3d(-9999px, -9999px, 0);">
-    <span class="w-1.5 h-1.5 rounded-full bg-[#e05a2b] shrink-0"></span>
-    <span id="part-tooltip-idx" class="text-zinc-500"></span>
-    <span id="part-tooltip-name" class="text-zinc-100 font-medium whitespace-nowrap"></span>
+  <!-- Exclusive Tactical Cursor & Linked CAD Part-Name Callout -->
+  <div id="yapshift-cursor-hud" class="opacity-0" style="transform: translate3d(-9999px, -9999px, 0);">
+    <div class="cursor-reticle"></div>
+    <div class="cursor-callout">
+      <div class="cursor-leader-line"></div>
+      <div class="cursor-badge font-mono text-[11px]">
+        <span id="cursor-part-idx" class="text-[#e05a2b] font-semibold"></span>
+        <span id="cursor-part-name" class="text-zinc-100 font-medium"></span>
+      </div>
+    </div>
   </div>
 
   <!-- Floating top-center exit bar during single-part focus -->
   <div id="focus-exit-bar" class="fixed top-6 left-1/2 -translate-x-1/2 z-30 arch-panel rounded-full pl-4 pr-2 py-1.5 flex items-center gap-3 text-xs font-mono transition-all duration-300 opacity-0 pointer-events-none -translate-y-2">
     <span class="w-1.5 h-1.5 rounded-full bg-[#e05a2b]"></span>
     <span id="focus-part-label" class="text-zinc-200 max-w-[240px] truncate"></span>
-    <button data-action="show-all-parts" class="px-3 py-1 rounded-full bg-[#e05a2b] hover:bg-[#f06736] text-white text-[10px] font-semibold tracking-wider uppercase transition cursor-pointer">
+    <button data-action="show-all-parts" class="px-3 py-1 rounded-full bg-[#e05a2b] hover:bg-[#f06736] text-white text-[10px] font-semibold tracking-wider uppercase transition">
       ✕ Exit Focus (ESC)
     </button>
   </div>
@@ -175,7 +290,7 @@
       <div id="hero-features" class="grid grid-cols-1 md:grid-cols-3 gap-4"></div>
 
       <div class="flex justify-center pt-2">
-        <button data-action="close-hero" class="cta-monolith px-8 py-3.5 rounded-full text-xs font-mono font-semibold tracking-[0.15em] uppercase flex items-center gap-3 cursor-pointer">
+        <button data-action="close-hero" class="cta-monolith px-8 py-3.5 rounded-full text-xs font-mono font-semibold tracking-[0.15em] uppercase flex items-center gap-3">
           <span>Enter Workbench</span>
           <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M13 5l7 7-7 7"/></svg>
         </button>
@@ -220,7 +335,7 @@
   <!-- Top-Right: Turntable, HDRI Light, Recenter, Capture & Inspector Toggle -->
   <div class="fixed top-6 right-6 z-20 flex items-center gap-2">
     <div class="arch-panel rounded-xl px-3 py-1.5 flex items-center gap-3 text-[11px] font-mono">
-      <button id="btn-orbit" data-action="toggle-orbit" class="flex items-center gap-1.5 text-zinc-200 hover:text-white transition" title="In-place model turntable (camera remains free)">
+      <button id="btn-orbit" data-action="toggle-orbit" class="flex items-center gap-1.5 text-zinc-200 hover:text-white transition" title="In-place model turntable (pauses while moving camera, auto-resumes)">
         <span class="w-1.5 h-1.5 rounded-full bg-[#e05a2b]"></span>
         <span>SPIN: ON</span>
       </button>
@@ -229,7 +344,7 @@
 
       <div class="flex items-center gap-2" title="Rotate HDRI environment lighting">
         <svg class="w-3.5 h-3.5 text-zinc-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
-        <input id="light-slider" type="range" min="0" max="360" value="0" class="arch-slider w-16 cursor-pointer" />
+        <input id="light-slider" type="range" min="0" max="360" value="0" class="arch-slider w-16" />
         <span id="light-deg" class="text-zinc-400 w-7 text-right">0°</span>
       </div>
     </div>
@@ -259,7 +374,6 @@
       <div id="spec-tags" class="flex flex-wrap gap-1.5 mt-2.5"></div>
     </div>
 
-    <!-- Live Geometry Telemetry -->
     <div class="grid grid-cols-3 gap-2 text-center">
       <div class="rounded-lg bg-white/[0.03] border border-white/[0.06] py-2 px-1">
         <div class="text-[9px] font-mono text-zinc-500 uppercase">Tris</div>
@@ -275,13 +389,11 @@
       </div>
     </div>
 
-    <!-- Guided Inspection Presets -->
     <div class="space-y-1.5">
       <div class="text-[10px] font-mono text-zinc-500 tracking-widest uppercase">Guided Inspection</div>
       <div id="workflow-list" class="space-y-1.5"></div>
     </div>
 
-    <!-- Sub-Part Isolation Inspector -->
     <div class="flex-1 flex flex-col min-h-[130px]">
       <div class="flex items-center justify-between mb-1.5">
         <div class="flex items-center gap-2">
@@ -292,7 +404,7 @@
           Show All
         </button>
       </div>
-      <div class="text-[10px] text-zinc-500 mb-2">Hover to outline, click any part to isolate &amp; zoom</div>
+      <div class="text-[10px] text-zinc-500 mb-2">Hover to lock &amp; identify, click any part to isolate &amp; zoom</div>
       <div id="subpart-list" class="flex-1 overflow-y-auto space-y-1 pr-1 text-[11px] font-mono"></div>
     </div>
   </aside>
@@ -309,7 +421,7 @@
         <button id="btn-mode-linear" data-action="explode-mode" data-mode="linear" class="px-2.5 py-1 rounded-md text-zinc-500 hover:text-zinc-200 transition">LINEAR AXIS</button>
       </div>
 
-      <input id="explode-slider" type="range" min="0" max="100" value="0" class="arch-slider w-36 cursor-pointer" />
+      <input id="explode-slider" type="range" min="0" max="100" value="0" class="arch-slider w-36" />
       <span id="explode-percent" class="text-xs font-mono font-medium text-zinc-200 w-9 text-right">0%</span>
 
       <div class="flex items-center gap-1 text-[10px] font-mono">
