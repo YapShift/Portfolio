@@ -1,6 +1,6 @@
 /**
  * YapShift 3D Portfolio Studio — Centralized Configuration (config.js)
- * All tunable visual, mathematical, camera, and asset parameters live here.
+ * All tunable visual, cursor, camera, mathematical, and asset parameters live here.
  */
 window.PortfolioConfig = {
   brand: {
@@ -25,7 +25,7 @@ window.PortfolioConfig = {
       {
         tag: '03 / INTERACTION',
         title: 'Live Part Isolation',
-        desc: 'Parallel background preloading for instant switching, hover outline + cursor labels, and click-to-focus part inspection.'
+        desc: 'Parallel background preloading for instant switching, linked reticle part callouts, and click-to-focus inspection.'
       }
     ],
     footerLeft: 'DESIGNED & MODELED BY YAPSHIFT',
@@ -44,6 +44,16 @@ window.PortfolioConfig = {
       { id: 'xray',     label: 'X-Ray',     rgb: '148, 163, 184' },
       { id: 'albedo',   label: 'Albedo',    rgb: '228, 228, 231' }
     ]
+  },
+
+  cursor: {
+    enabled: true,
+    followLerp: 0.32,
+    idleSizePx: 22,
+    interactiveSizePx: 32,
+    partLockSizePx: 28,
+    flipLeftThresholdPx: 280,
+    showPartLabelOnlyWhenUnfocused: true
   },
 
   background: {
@@ -67,37 +77,34 @@ window.PortfolioConfig = {
     enabledByDefault: true,
     stepRadians: 0.008,
     frameIntervalMs: 32,
-    resumeAfterCameraIdleMs: 1200
+    // Resume spin shortly after camera orbit/pan ends
+    resumeAfterCameraIdleMs: 650,
+    // Watchdog timer ensures wheel-zoom (which may omit cameraend) never stalls spin
+    interactionWatchdogMs: 1400
   },
 
   explosion: {
-    // Base world-space explosion radius as a fraction of initial camera distance
     worldRadiusRatio: 0.065,
     minWorldRadius: 0.02,
-    // Proxy 3D AABB hitbox settings
     hitboxHalfSizeRatio: 0.14,
     hitboxPadding: 1.06,
     solverIterations: 18,
     radialHardCapMultiplier: 1.35,
     naturalDirectionBlend: 0.85,
-    // Linear queue settings
     linearHalfSpanMultiplier: 1.55,
     linearOffAxisPull: 0.50,
-    // UI & animation timings
     presetPercent: 65,
     buttonDurationSec: 0.65,
     sliderReleaseDurationSec: 0.45,
     modeSwitchDurationSec: 0.55,
-    // Adaptive camera pull-back multiplier at 100% explosion
     cameraZoomRadial: 0.22,
     cameraZoomLinear: 0.38
   },
 
   interaction: {
+    pickMode: 'slow',
     outlineWidth: 3.5,
     outlineColor: [0.95, 0.42, 0.20],
-    tooltipOffsetX: 16,
-    tooltipOffsetY: 16,
     focusBoxUpdateDelayMs: 90,
     focusTransitionSec: 0.65,
     fallbackFocusDistanceRatio: 0.35,
@@ -115,7 +122,7 @@ window.PortfolioConfig = {
       category: 'MECHANICAL / HARD-SURFACE',
       uid: '08632550c5604444a14b53dc339b6589',
       description:
-        'Precision coilover spring, control arms, hub carrier, and damper assembly. Supports AABB collision-resolved explosion, hover outline inspection, and single-part camera focus.',
+        'Precision coilover spring, control arms, hub carrier, and damper assembly. Supports AABB collision-resolved explosion, hover outline callouts, and single-part camera focus.',
       tags: ['Hard-Surface', 'Multi-Part', 'PBR Metal'],
       workflow: [
         {
@@ -123,7 +130,7 @@ window.PortfolioConfig = {
           title: 'Radial 3D Exploded View',
           tag: '65%',
           action: 'explode-radial',
-          desc: ' Separates components along natural assembly vectors with 3D AABB collision avoidance.'
+          desc: 'Separates components along natural assembly vectors with 3D AABB collision avoidance.'
         },
         {
           step: '02',
