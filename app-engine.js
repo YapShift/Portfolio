@@ -1,6 +1,10 @@
 /**
- * YapShift Native Three.js 3D Workbench Engine (app-engine.js v31.0)
- * Anime.js Kinetic Aesthetic + Screen-Space Hairline Outline + True Box3 Explosion.
+ * YapShift Native Three.js 3D Workbench Engine (app-engine.js v32.0)
+ * - X-Ray compatible Screen-Space Silhouette Mask Outline (zero interior bleed, zero hard-edge cracks)
+ * - Anime.js-inspired 3D model kinetic choreography (staggered spring assembly, elastic wave explosion,
+ *   spring hover micro-pop, subtle weightless levitation)
+ * - Explosion controls strictly locked during Single-Part Focus Mode
+ * - High-contrast dark-studio lighting & matte titanium tint for untextured white GLB meshes
  */
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -19,8 +23,137 @@ function easeOutCubic(t) {
   return 1 - Math.pow(1 - t, 3);
 }
 
+function easeOutBack(t, overshoot = 1.25) {
+  const c3 = overshoot + 1;
+  return 1 + c3 * Math.pow(t - 1, 3) + overshoot * Math.pow(t - 1, 2);
+}
+
 /**
- * Anime.js Motion Choreography Helpers (gracefully degrades if offline)
+ * Offscreen Silhouette Mask Outline Renderer:
+ * Renders ONLY the hovered mesh as a solid white mask into an offscreen target,
+ * then composites an exact `uOutlinePx` outer contour ring (strictly discarding interior pixels).
+ * Works identically on Opaque PBR, Clay, Wireframe, and Transparent X-Ray materials!
+ */
+class SilhouetteOutlineRenderer {
+  constructor(renderer, cfg) {
+    this.renderer = renderer;
+    const dpr = Math.min(window.devicePixelRatio || 1, cfg.renderer.maxPixelRatio);
+    const w = Math.max(1, Math.floor(window.innerWidth * dpr));
+    const h = Math.max(1, Math.floor(window.innerHeight * dpr));
+
+    this.maskRT = new THREE.WebGLRenderTarget(w, h, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format: THREE.RGBAFormat,
+      depthBuffer: true,
+      stencilBuffer: false
+    });
+
+    this.maskScene = new THREE.Scene();
+    this.maskMaterial = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      side: THREE.DoubleSide
+    });
+    this.maskMesh = new THREE.Mesh(new THREE.BufferGeometry(), this.maskMaterial);
+    this.maskMesh.matrixAutoUpdate = false;
+    this.maskScene.add(this.maskMesh);
+
+    this.compositeScene = new THREE.Scene();
+    this.compositeCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+
+    this.compositeMaterial = new THREE.ShaderMaterial({
+      uniforms: {
+        tMask: { value: this.maskRT.texture },
+        uTexelSize: { value: new THREE.Vector2(1 / window.innerWidth, 1 / window.innerHeight) },
+        uOutlinePx: { value: cfg.interaction.hoverOutlinePx },
+        uColor: { value: new THREE.Color(cfg.interaction.hoverOutlineColor) },
+        uOpacity: { value: cfg.interaction.hoverOutlineOpacity }
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = vec4(position.xy, 0.0, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D tMask;
+        uniform vec2 uTexelSize;
+        uniform float uOutlinePx;
+        uniform vec3 uColor;
+        uniform float uOpacity;
+        varying vec2 vUv;
+
+        void main() {
+          float center = texture2D(tMask, vUv).r;
+          // Discard every pixel inside the mesh so X-Ray transparency stays 100% clean
+          if (center > 0.5) discard;
+
+          vec2 r = uTexelSize * uOutlinePx;
+          float maxN = 0.0;
+          // 8-tap circular dilation for crisp, anti-aliased silhouette halo
+          maxN = max(maxN, texture2D(tMask, vUv + vec2( r.x,  0.0)).r);
+          maxN = max(maxN, texture2D(tMask, vUv + vec2(-r.x,  0.0)).r);
+          maxN = max(maxN, texture2D(tMask, vUv + vec2( 0.0,  r.y)).r);
+          maxN = max(maxN, texture2D(tMask, vUv + vec2( 0.0, -r.y)).r);
+          vec2 d = r * 0.7071;
+          maxN = max(maxN, texture2D(tMask, vUv + vec2( d.x,  d.y)).r);
+          maxN = max(maxN, texture2D(tMask, vUv + vec2(-d.x,  d.y)).r);
+          maxN = max(maxN, texture2D(tMask, vUv + vec2( d.x, -d.y)).r);
+          maxN = max(maxN, texture2D(tMask, vUv + vec2(-d.x, -d.y)).r);
+
+          float edge = smoothstep(0.15, 0.85, maxN) * (1.0 - center);
+          if (edge < 0.02) discard;
+
+          gl_FragColor = vec4(uColor, edge * uOpacity);
+        }
+      `,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false
+    });
+
+    const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.compositeMaterial);
+    quad.frustumCulled = false;
+    this.compositeScene.add(quad);
+  }
+
+  resize(width, height, pixelRatio) {
+    const rw = Math.max(1, Math.floor(width * pixelRatio));
+    const rh = Math.max(1, Math.floor(height * pixelRatio));
+    this.maskRT.setSize(rw, rh);
+    this.compositeMaterial.uniforms.uTexelSize.value.set(1 / width, 1 / height);
+  }
+
+  renderOverlay(hoveredMesh, camera) {
+    if (!hoveredMesh || !hoveredMesh.visible || !hoveredMesh.geometry) return;
+
+    hoveredMesh.updateWorldMatrix(true, false);
+    this.maskMesh.geometry = hoveredMesh.geometry;
+    this.maskMesh.matrixWorld.copy(hoveredMesh.matrixWorld);
+
+    const prevTarget = this.renderer.getRenderTarget();
+    const prevAutoClear = this.renderer.autoClear;
+    const prevClearAlpha = this.renderer.getClearAlpha();
+
+    // 1. Render pure white silhouette mask offscreen
+    this.renderer.setRenderTarget(this.maskRT);
+    this.renderer.setClearColor(0x000000, 0);
+    this.renderer.clear(true, true, false);
+    this.renderer.render(this.maskScene, camera);
+
+    // 2. Composite outer silhouette halo onto main transparent canvas
+    this.renderer.setRenderTarget(prevTarget);
+    this.renderer.autoClear = false;
+    this.renderer.render(this.compositeScene, this.compositeCam);
+
+    this.renderer.autoClear = prevAutoClear;
+    this.renderer.setClearAlpha(prevClearAlpha);
+  }
+}
+
+/**
+ * Anime.js UI Motion Choreography Helpers
  */
 const MotionFX = {
   playHeroEntrance() {
@@ -28,7 +161,7 @@ const MotionFX = {
     window.anime({
       targets: '#hero-overlay .hero-stagger, #hero-features .arch-card',
       translateY: [22, 0],
-      opacity: [0, 1],
+      opacity:,
       duration: 760,
       delay: window.anime.stagger(65, { start: 80 }),
       easing: 'easeOutExpo'
@@ -40,7 +173,7 @@ const MotionFX = {
     window.anime({
       targets: '.hud-stagger',
       translateY: [16, 0],
-      opacity: [0, 1],
+      opacity:,
       duration: 620,
       delay: window.anime.stagger(75),
       easing: 'easeOutExpo'
@@ -69,7 +202,7 @@ const MotionFX = {
     window.anime({
       targets: '#subpart-list .part-row',
       translateX: [12, 0],
-      opacity: [0, 1],
+      opacity:,
       duration: 420,
       delay: window.anime.stagger(18),
       easing: 'easeOutExpo'
@@ -200,7 +333,6 @@ const AnimeGridStage = {
   setAccent(rgb) { this.accentRGB = rgb || window.PortfolioConfig.theme.accentRGB; },
   setExplodeProgress(t) { this.targetExplodeT = Math.max(0, Math.min(1, t)); },
 
-  // Spawn an expanding Anime.js-style kinetic shockwave ring
   pulseShockwave(x, y) {
     this.shockwaves.push({
       x: x !== undefined ? x : this.w * 0.5,
@@ -231,7 +363,6 @@ const AnimeGridStage = {
     const cx = w * 0.5, cy = h * 0.5;
     const rgb = this.accentRGB;
 
-    // 1. Subtle radial studio spotlight
     const studioGlow = ctx.createRadialGradient(cx, cy, 30, cx, cy, Math.max(w, h) * 0.54);
     studioGlow.addColorStop(0, `rgba(${rgb}, ${0.065 + this.explodeT * 0.04})`);
     studioGlow.addColorStop(0.5, 'rgba(255, 255, 255, 0.014)');
@@ -239,7 +370,6 @@ const AnimeGridStage = {
     ctx.fillStyle = studioGlow;
     ctx.fillRect(0, 0, w, h);
 
-    // 2. Update & draw expanding shockwaves
     for (let i = this.shockwaves.length - 1; i >= 0; i--) {
       const sw = this.shockwaves[i];
       sw.r += bgCfg.shockwaveSpeed;
@@ -255,7 +385,6 @@ const AnimeGridStage = {
       ctx.stroke();
     }
 
-    // 3. Batched architectural dot/crosshair matrix + Anime.js staggered wave pulse
     const spacing = bgCfg.gridSpacing;
     const majorStep = bgCfg.majorCrosshairStep;
     const cols = Math.ceil(w / spacing);
@@ -309,7 +438,6 @@ const AnimeGridStage = {
     ctx.lineWidth = 1;
     ctx.stroke();
 
-    // Render magnetic cursor & shockwave-excited nodes
     for (let i = 0; i < activeNodes.length; i++) {
       const n = activeNodes[i];
       const mix = 1 - n.dist / interactR;
@@ -335,19 +463,16 @@ const AnimeGridStage = {
       }
     }
 
-    // 4. Counter-rotating precision orbital telemetry rings & degree ticks
     const rMain = Math.min(w, h) * (bgCfg.reticleRadiusRatio + this.explodeT * bgCfg.reticleExplodeExpand);
     const rotA = now * bgCfg.reticleRotationSpeed;
     const rotB = -now * bgCfg.reticleRotationSpeed * 1.6;
 
-    // Outer subtle hairline ring
     ctx.strokeStyle = `rgba(255, 255, 255, ${0.05 + this.explodeT * 0.05})`;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.arc(cx, cy, rMain, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Rotating precision degree ticks along outer ring (36 ticks)
     ctx.beginPath();
     for (let k = 0; k < 36; k++) {
       const a = rotA + (k * Math.PI * 2) / 36;
@@ -359,7 +484,6 @@ const AnimeGridStage = {
     ctx.strokeStyle = `rgba(255, 255, 255, ${0.09 + this.explodeT * 0.06})`;
     ctx.stroke();
 
-    // Inner counter-rotating accent arcs
     const rInner = rMain * 0.74;
     ctx.strokeStyle = `rgba(${rgb}, ${0.18 + this.explodeT * 0.14})`;
     ctx.lineWidth = 1.25;
@@ -373,7 +497,7 @@ const AnimeGridStage = {
 };
 
 /**
- * Native Three.js Multi-Asset Engine
+ * Native Three.js Multi-Asset Engine with Kinetic 3D Physics
  */
 class ThreeStudioEngine {
   constructor() {
@@ -386,12 +510,14 @@ class ThreeStudioEngine {
 
     this.initRendererAndScene(cfg);
     this.initLoaders(cfg);
-    this.initOutlineMaterial(cfg);
+    this.outlineRenderer = new SilhouetteOutlineRenderer(this.renderer, cfg);
     this.bindViewportEvents();
 
     this.camTween = null;
     this.explodeTween = null;
+    this.assemblyTween = null;
     this.clock = new THREE.Clock();
+    this.elapsedTime = 0;
     this.userInteracting = false;
     this.spinResumeTimer = null;
     this.isDragging = false;
@@ -399,7 +525,6 @@ class ThreeStudioEngine {
 
     this.raycaster = new THREE.Raycaster();
     this.pointerNDC = new THREE.Vector2();
-    this.outlineShell = null;
 
     this.telemetryEl = {
       az: document.getElementById('telemetry-az'),
@@ -414,34 +539,38 @@ class ThreeStudioEngine {
   get activeCtx() { return this.cache.get(this.activeAssetId) || null; }
 
   initRendererAndScene(cfg) {
+    const rCfg = cfg.renderer;
     this.renderer = new THREE.WebGLRenderer({
       antialias: true,
       alpha: true,
       preserveDrawingBuffer: false,
       powerPreference: 'high-performance'
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, cfg.renderer.maxPixelRatio));
+    const dpr = Math.min(window.devicePixelRatio || 1, rCfg.maxPixelRatio);
+    this.renderer.setPixelRatio(dpr);
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = cfg.renderer.exposure;
+    this.renderer.toneMappingExposure = rCfg.exposure;
     this.renderer.setClearColor(0x000000, 0);
     this.container.appendChild(this.renderer.domElement);
 
     this.scene = new THREE.Scene();
 
+    // Balanced dark-studio IBL environment (prevents washed-out white look)
     const pmrem = new THREE.PMREMGenerator(this.renderer);
     this.envRenderTarget = pmrem.fromScene(new RoomEnvironment(), 0.04);
     this.scene.environment = this.envRenderTarget.texture;
-    this.scene.environmentIntensity = cfg.renderer.envIntensity;
+    this.scene.environmentIntensity = rCfg.envIntensity;
     pmrem.dispose();
 
+    // High-contrast 3-point industrial studio light rig
     this.lightRig = new THREE.Group();
-    const keyLight = new THREE.DirectionalLight(0xfff5eb, 1.4);
-    keyLight.position.set(4, 6, 5);
-    const rimLight = new THREE.DirectionalLight(0xcbd5e1, 0.85);
-    rimLight.position.set(-5, 3, -4);
-    const fillLight = new THREE.HemisphereLight(0xffffff, 0x18181b, 0.45);
+    const keyLight = new THREE.DirectionalLight(0xfff4e8, rCfg.keyLightIntensity);
+    keyLight.position.set(4.5, 6.5, 4.5);
+    const rimLight = new THREE.DirectionalLight(0xb8c7e0, rCfg.rimLightIntensity);
+    rimLight.position.set(-5.0, 3.0, -4.5);
+    const fillLight = new THREE.HemisphereLight(0xe4e4e7, 0x09090b, rCfg.hemiLightIntensity);
     this.lightRig.add(keyLight, rimLight, fillLight);
     this.scene.add(this.lightRig);
 
@@ -472,11 +601,13 @@ class ThreeStudioEngine {
     });
 
     window.addEventListener('resize', () => {
+      const nextDpr = Math.min(window.devicePixelRatio || 1, rCfg.maxPixelRatio);
       this.camera.aspect = window.innerWidth / window.innerHeight;
       this.camera.updateProjectionMatrix();
+      this.renderer.setPixelRatio(nextDpr);
       this.renderer.setSize(window.innerWidth, window.innerHeight);
-      if (this.outlineMaterial) {
-        this.outlineMaterial.uniforms.uResolution.value.set(window.innerWidth, window.innerHeight);
+      if (this.outlineRenderer) {
+        this.outlineRenderer.resize(window.innerWidth, window.innerHeight, nextDpr);
       }
     });
   }
@@ -489,46 +620,26 @@ class ThreeStudioEngine {
   }
 
   /**
-   * Exact Screen-Space Pixel-Locked Hairline Outline Shader:
-   * Extrudes vertices in Clip Space by `uOutlinePx` CSS pixels so silhouette thickness
-   * remains razor-sharp (~1.75px) regardless of camera zoom or part size.
+   * Detect default untextured pure-white GLB materials and give them a refined
+   * matte titanium-grey studio base so bevels & shadows remain crisp instead of blinding white.
    */
-  initOutlineMaterial(cfg) {
-    const color = new THREE.Color(cfg.interaction.hoverOutlineColor);
-    this.outlineMaterial = new THREE.ShaderMaterial({
-      uniforms: {
-        uColor: { value: color },
-        uOpacity: { value: cfg.interaction.hoverOutlineOpacity },
-        uOutlinePx: { value: cfg.interaction.hoverOutlinePx },
-        uResolution: { value: new THREE.Vector2(window.innerWidth, window.innerHeight) }
-      },
-      vertexShader: `
-        uniform float uOutlinePx;
-        uniform vec2 uResolution;
-        void main() {
-          vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
-          vec4 clipPos = projectionMatrix * mvPos;
-          vec3 viewNormal = normalize(normalMatrix * normal);
-          vec4 clipNormal = projectionMatrix * vec4(viewNormal, 0.0);
-          vec2 screenDir = clipNormal.xy;
-          float len = length(screenDir);
-          if (len > 1e-5) {
-            screenDir /= len;
-            clipPos.xy += screenDir * (uOutlinePx * 2.0 / uResolution) * clipPos.w;
-          }
-          gl_Position = clipPos;
+  refineUntexturedWhiteMaterials(root) {
+    const rCfg = window.PortfolioConfig.renderer;
+    if (!rCfg.untexturedTintHex) return;
+    const tint = new THREE.Color(rCfg.untexturedTintHex);
+
+    root.traverse((obj) => {
+      if (!obj.isMesh || !obj.material) return;
+      const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+      mats.forEach((m) => {
+        if (!m || m.map) return;
+        if (m.color && m.color.r > 0.94 && m.color.g > 0.94 && m.color.b > 0.94) {
+          m.color.copy(tint);
+          if (typeof m.roughness === 'number') m.roughness = rCfg.untexturedRoughness;
+          if (typeof m.metalness === 'number') m.metalness = rCfg.untexturedMetalness;
+          m.needsUpdate = true;
         }
-      `,
-      fragmentShader: `
-        uniform vec3 uColor;
-        uniform float uOpacity;
-        void main() {
-          gl_FragColor = vec4(uColor, uOpacity);
-        }
-      `,
-      side: THREE.BackSide,
-      transparent: true,
-      depthWrite: false
+      });
     });
   }
 
@@ -623,6 +734,7 @@ class ThreeStudioEngine {
     this.gltfLoader.load(
       asset.modelUrl,
       (gltf) => {
+        this.refineUntexturedWhiteMaterials(gltf.scene);
         const { spinPivot, normSphere } = SceneGraphMath.normalizeModel(gltf.scene);
         const stats = SceneGraphMath.measureGeometryStats(spinPivot);
         const analysis = SceneGraphMath.analyzeModelParts(spinPivot);
@@ -634,7 +746,14 @@ class ThreeStudioEngine {
         ctx.verts = stats.verts;
         asset.loadedPolys = stats.tris;
 
+        // Precompute per-part spring state & radial wave order for Anime.js kinetic choreography
+        const maxRadial = Math.max(1e-4, ...ctx.parts.map(p => p.radialDelta.length()));
         ctx.parts.forEach((p, idx) => {
+          p.origScale = p.mesh.scale.clone();
+          p.staggerOrder = p.radialDelta.length() / maxRadial;
+          p.hoverSpringPos = 1.0;
+          p.hoverSpringVel = 0.0;
+          p.explodeProgress = 0.0;
           ctx.meshToPartIdx.set(p.mesh, idx);
           ctx.originalMaterials.set(p.mesh, p.mesh.material);
         });
@@ -671,6 +790,25 @@ class ThreeStudioEngine {
     return ctx;
   }
 
+  // Trigger Anime.js-inspired staggered elastic assembly entrance on the 3D parts
+  triggerModelAssemblyEntrance(ctx) {
+    const mCfg = window.PortfolioConfig.modelMotion;
+    if (!mCfg.assemblyEntranceEnabled || !ctx || !ctx.ready) return;
+
+    const now = performance.now();
+    this.assemblyTween = {
+      ctx,
+      startTime: now,
+      duration: mCfg.assemblyDurationMs,
+      staggerSpan: mCfg.assemblyStaggerSpanMs,
+      dropOffset: mCfg.assemblyDropOffset
+    };
+
+    ctx.parts.forEach(p => {
+      p.mesh.scale.copy(p.origScale).multiplyScalar(0.01);
+    });
+  }
+
   activateLoadedContext(ctx) {
     this.resetModelState(ctx, false);
     const camCfg = window.PortfolioConfig.camera;
@@ -679,6 +817,8 @@ class ThreeStudioEngine {
     this.camera.position.copy(ctx.defaultCamPos);
     this.controls.target.copy(ctx.defaultCamTarget);
     this.controls.update();
+
+    this.triggerModelAssemblyEntrance(ctx);
     AnimeGridStage.pulseShockwave();
     EventBus.emit('engine:ready', ctx);
   }
@@ -712,6 +852,7 @@ class ThreeStudioEngine {
     if (!ctx || !ctx.ready) return;
 
     this.explodeTween = null;
+    this.assemblyTween = null;
     this.clearHover(false);
 
     ctx.focusedPartIdx = null;
@@ -719,9 +860,14 @@ class ThreeStudioEngine {
     ctx.parts.forEach(p => {
       p.mesh.visible = true;
       p.mesh.position.copy(p.origPos);
+      p.mesh.scale.copy(p.origScale);
+      p.hoverSpringPos = 1.0;
+      p.hoverSpringVel = 0.0;
+      p.explodeProgress = 0.0;
     });
 
     ctx.explodeVal = 0;
+    ctx.spinPivot.position.set(0, 0, 0);
     ctx.spinPivot.rotation.set(0, 0, 0);
 
     if (ctx.shaderMode !== 'rendered') {
@@ -765,6 +911,7 @@ class ThreeStudioEngine {
     ctx.explodeVal = t * 100;
     const isLinear = this.mode === 'linear';
     ctx.parts.forEach(p => {
+      p.explodeProgress = t;
       const delta = isLinear ? p.linearDelta : p.radialDelta;
       p.mesh.position.copy(p.origPos).addScaledVector(delta, t);
     });
@@ -773,8 +920,10 @@ class ThreeStudioEngine {
 
   explode(percent, adjustCam = true, durationMs = 0) {
     const ctx = this.activeCtx;
-    if (!ctx || !ctx.ready || ctx.parts.length <= 1) return;
+    // Strictly disable explosion while inspecting an isolated single part
+    if (!ctx || !ctx.ready || ctx.parts.length <= 1 || ctx.focusedPartIdx !== null) return;
 
+    this.assemblyTween = null;
     const targetVal = Math.max(0, Math.min(100, parseFloat(percent) || 0));
 
     if (durationMs <= 0) {
@@ -784,14 +933,18 @@ class ThreeStudioEngine {
       AnimeGridStage.pulseShockwave();
       this.explodeTween = {
         ctx,
-        startVal: ctx.explodeVal,
-        endVal: targetVal,
+        startVals: ctx.parts.map(p => p.explodeProgress),
+        endT: targetVal / 100,
         startTime: performance.now(),
-        duration: durationMs
+        duration: durationMs,
+        staggerSpan: window.PortfolioConfig.modelMotion.explodeWaveStaggerMs,
+        overshoot: window.PortfolioConfig.modelMotion.explodeOvershoot
       };
+      ctx.explodeVal = targetVal;
+      AnimeGridStage.setExplodeProgress(targetVal / 100);
     }
 
-    if (adjustCam && ctx.focusedPartIdx === null) {
+    if (adjustCam) {
       const z = this.getZoomMultiplier(targetVal);
       const dir = this.camera.position.clone().sub(this.controls.target).normalize();
       const endPos = this.controls.target.clone().addScaledVector(dir, ctx.baseCamDistance * z);
@@ -809,13 +962,7 @@ class ThreeStudioEngine {
       return;
     }
 
-    if (ctx.hoveredPartIdx !== idx) {
-      this.removeHoverVisuals(ctx);
-      ctx.hoveredPartIdx = idx;
-      const part = idx !== null ? ctx.parts[idx] : null;
-      if (part) this.applyHoverVisuals(part.mesh);
-    }
-
+    ctx.hoveredPartIdx = idx;
     EventBus.emit('engine:hover-updated', {
       idx,
       part: idx !== null ? ctx.parts[idx] : null,
@@ -825,49 +972,8 @@ class ThreeStudioEngine {
 
   clearHover(fromList = false) {
     const ctx = this.activeCtx;
-    if (ctx && ctx.hoveredPartIdx !== null) {
-      this.removeHoverVisuals(ctx);
-      ctx.hoveredPartIdx = null;
-    }
+    if (ctx) ctx.hoveredPartIdx = null;
     EventBus.emit('engine:hover-updated', { idx: null, part: null, fromList });
-  }
-
-  applyHoverVisuals(mesh) {
-    const interCfg = window.PortfolioConfig.interaction;
-    const shell = new THREE.Mesh(mesh.geometry, this.outlineMaterial);
-    shell.name = '__HoverOutlineShell';
-    shell.renderOrder = 999;
-    mesh.add(shell);
-    this.outlineShell = shell;
-
-    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    mats.forEach(m => {
-      if (m && m.emissive) {
-        if (!m.userData.__origEmissive) {
-          m.userData.__origEmissive = m.emissive.clone();
-          m.userData.__origEmissiveInt = m.emissiveIntensity;
-        }
-        m.emissive.setHex(interCfg.hoverOutlineColor);
-        m.emissiveIntensity = interCfg.hoverEmissiveIntensity;
-      }
-    });
-  }
-
-  removeHoverVisuals(ctx) {
-    if (this.outlineShell && this.outlineShell.parent) {
-      this.outlineShell.parent.remove(this.outlineShell);
-      this.outlineShell = null;
-    }
-    if (ctx && ctx.hoveredPartIdx !== null && ctx.parts[ctx.hoveredPartIdx]) {
-      const mesh = ctx.parts[ctx.hoveredPartIdx].mesh;
-      const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-      mats.forEach(m => {
-        if (m && m.emissive && m.userData.__origEmissive) {
-          m.emissive.copy(m.userData.__origEmissive);
-          m.emissiveIntensity = m.userData.__origEmissiveInt;
-        }
-      });
-    }
   }
 
   selectSinglePartToFocus(idx) {
@@ -879,6 +985,10 @@ class ThreeStudioEngine {
       return;
     }
 
+    // Cancel any in-flight explosion or assembly animation before isolating
+    this.explodeTween = null;
+    this.assemblyTween = null;
+
     if (!ctx.savedPreFocusCam) {
       ctx.savedPreFocusCam = {
         pos: this.camera.position.clone(),
@@ -889,8 +999,14 @@ class ThreeStudioEngine {
     this.clearHover(false);
     ctx.focusedPartIdx = idx;
 
+    // Reset spinPivot levitation smoothly to 0 so isolated part sits dead-center
+    ctx.spinPivot.position.y = 0;
+
     ctx.parts.forEach((p, i) => {
       p.mesh.visible = (i === idx);
+      p.mesh.scale.copy(p.origScale);
+      p.hoverSpringPos = 1.0;
+      p.hoverSpringVel = 0.0;
     });
 
     const targetMesh = ctx.parts[idx].mesh;
@@ -955,9 +1071,6 @@ class ThreeStudioEngine {
     const themeCfg = window.PortfolioConfig.theme;
     ctx.shaderMode = mode;
 
-    const prevHovered = ctx.hoveredPartIdx;
-    this.removeHoverVisuals(ctx);
-
     ctx.parts.forEach(p => {
       const orig = ctx.originalMaterials.get(p.mesh);
       if (mode === 'rendered') {
@@ -969,8 +1082,8 @@ class ThreeStudioEngine {
         if (mode === 'clay') {
           return new THREE.MeshStandardMaterial({
             color: themeCfg.clayColor,
-            roughness: 0.72,
-            metalness: 0.05,
+            roughness: themeCfg.clayRoughness,
+            metalness: themeCfg.clayMetalness,
             normalMap: src && src.normalMap ? src.normalMap : null,
             normalScale: src && src.normalScale ? src.normalScale.clone() : new THREE.Vector2(1, 1)
           });
@@ -999,10 +1112,6 @@ class ThreeStudioEngine {
 
       p.mesh.material = Array.isArray(orig) ? orig.map(convertMat) : convertMat(orig);
     });
-
-    if (prevHovered !== null && ctx.parts[prevHovered]) {
-      this.applyHoverVisuals(ctx.parts[prevHovered].mesh);
-    }
   }
 
   rotateLight(deg) {
@@ -1059,9 +1168,98 @@ class ThreeStudioEngine {
     this.telemetryEl.dist.textContent = dist.toFixed(2);
   }
 
+  // Spring physics for hovered part micro-pop & staggered assembly/explosion animations
+  updateKineticModelEffects(ctx, dt, now) {
+    if (!ctx || !ctx.ready) return;
+    const mCfg = window.PortfolioConfig.modelMotion;
+
+    // 1. Staggered Elastic Assembly Entrance
+    if (this.assemblyTween && this.assemblyTween.ctx === ctx) {
+      const tw = this.assemblyTween;
+      let allDone = true;
+      ctx.parts.forEach(p => {
+        const delay = p.staggerOrder * tw.staggerSpan;
+        const rawT = (now - tw.startTime - delay) / tw.duration;
+        if (rawT < 1) allDone = false;
+        const clamped = Math.max(0, Math.min(1, rawT));
+        const eased = clamped > 0 ? easeOutBack(clamped, 1.35) : 0;
+        const s = Math.max(0.01, eased);
+        p.mesh.scale.copy(p.origScale).multiplyScalar(s);
+        // Subtle radial fly-in settling cleanly into origPos
+        p.mesh.position.copy(p.origPos).addScaledVector(p.radialDelta, (1 - Math.min(1, eased)) * tw.dropOffset);
+      });
+      if (allDone) {
+        ctx.parts.forEach(p => {
+          p.mesh.scale.copy(p.origScale);
+          p.mesh.position.copy(p.origPos);
+        });
+        this.assemblyTween = null;
+      }
+      return;
+    }
+
+    // 2. Staggered Elastic Wave Explosion
+    if (this.explodeTween && this.explodeTween.ctx === ctx) {
+      const tw = this.explodeTween;
+      const isLinear = this.mode === 'linear';
+      const isReassembling = tw.endT < 0.01;
+      let allDone = true;
+
+      ctx.parts.forEach((p, idx) => {
+        // Expand outer-first; reassemble inner-first for natural mechanical feel
+        const order = isReassembling ? p.staggerOrder : (1 - p.staggerOrder);
+        const delay = order * tw.staggerSpan;
+        const rawT = (now - tw.startTime - delay) / tw.duration;
+        if (rawT < 1) allDone = false;
+
+        const clamped = Math.max(0, Math.min(1, rawT));
+        const eased = clamped > 0 ? easeOutBack(clamped, tw.overshoot) : 0;
+        const curT = tw.startVals[idx] + (tw.endT - tw.startVals[idx]) * eased;
+        p.explodeProgress = curT;
+
+        const delta = isLinear ? p.linearDelta : p.radialDelta;
+        p.mesh.position.copy(p.origPos).addScaledVector(delta, curT);
+      });
+
+      if (allDone) {
+        ctx.parts.forEach(p => { p.explodeProgress = tw.endT; });
+        this.explodeTween = null;
+      }
+    }
+
+    // 3. Spring-Damped Hover Scale Micro-Pop (only when not isolated)
+    const k = mCfg.hoverSpringStiffness;
+    const c = mCfg.hoverSpringDamping;
+    ctx.parts.forEach((p, idx) => {
+      const targetScale = (ctx.focusedPartIdx === null && ctx.hoveredPartIdx === idx)
+        ? mCfg.hoverPopScale
+        : 1.0;
+      const force = (targetScale - p.hoverSpringPos) * k - p.hoverSpringVel * c;
+      p.hoverSpringVel += force * dt;
+      p.hoverSpringPos += p.hoverSpringVel * dt;
+
+      if (Math.abs(targetScale - p.hoverSpringPos) > 0.0004 || Math.abs(p.hoverSpringVel) > 0.0004) {
+        p.mesh.scale.copy(p.origScale).multiplyScalar(p.hoverSpringPos);
+      } else if (p.hoverSpringPos !== targetScale) {
+        p.hoverSpringPos = targetScale;
+        p.hoverSpringVel = 0;
+        p.mesh.scale.copy(p.origScale).multiplyScalar(targetScale);
+      }
+    });
+
+    // 4. Weightless Studio Levitation (pauses smoothly when isolated)
+    if (mCfg.idleFloatEnabled && ctx.spinPivot) {
+      const targetY = ctx.focusedPartIdx === null
+        ? Math.sin(this.elapsedTime * mCfg.idleFloatSpeed) * mCfg.idleFloatAmplitude
+        : 0;
+      ctx.spinPivot.position.y += (targetY - ctx.spinPivot.position.y) * Math.min(1, dt * 6);
+    }
+  }
+
   animate() {
     requestAnimationFrame(() => this.animate());
     const dt = Math.min(this.clock.getDelta(), 0.05);
+    this.elapsedTime += dt;
     const now = performance.now();
 
     if (this.camTween) {
@@ -1072,32 +1270,38 @@ class ThreeStudioEngine {
       if (t >= 1) this.camTween = null;
     }
 
-    if (this.explodeTween) {
-      const tw = this.explodeTween;
-      const t = Math.min(1, (now - tw.startTime) / tw.duration);
-      const val = tw.startVal + (tw.endVal - tw.startVal) * easeOutCubic(t);
-      this.applyExplosionImmediate(tw.ctx, val);
-      if (t >= 1) this.explodeTween = null;
-    }
-
     const heroOverlay = document.getElementById('hero-overlay');
     const heroClosed = !heroOverlay || heroOverlay.classList.contains('hidden');
     const ctx = this.activeCtx;
 
-    if (
-      heroClosed &&
-      ctx && ctx.ready && ctx.spinPivot &&
-      this.autoSpinEnabled &&
-      !this.userInteracting &&
-      !this.camTween &&
-      ctx.focusedPartIdx === null
-    ) {
-      ctx.spinPivot.rotation.y += window.PortfolioConfig.turntable.radiansPerSecond * dt;
+    if (ctx && ctx.ready) {
+      this.updateKineticModelEffects(ctx, dt, now);
+
+      if (
+        heroClosed &&
+        ctx.spinPivot &&
+        this.autoSpinEnabled &&
+        !this.userInteracting &&
+        !this.camTween &&
+        ctx.focusedPartIdx === null
+      ) {
+        ctx.spinPivot.rotation.y += window.PortfolioConfig.turntable.radiansPerSecond * dt;
+      }
     }
 
     this.controls.update();
     this.updateCameraTelemetry(now);
+
+    // 1. Render main 3D scene
     this.renderer.render(this.scene, this.camera);
+
+    // 2. Render X-Ray compatible screen-space silhouette outline ONLY if a part is hovered
+    if (ctx && ctx.ready && ctx.focusedPartIdx === null && ctx.hoveredPartIdx !== null) {
+      const hoveredPart = ctx.parts[ctx.hoveredPartIdx];
+      if (hoveredPart) {
+        this.outlineRenderer.renderOverlay(hoveredPart.mesh, this.camera);
+      }
+    }
   }
 }
 
@@ -1152,6 +1356,22 @@ const StudioUI = {
     presetBtn.textContent = `${cfg.explosion.presetPercent}%`;
   },
 
+  // Lock/unlock explosion dock controls based on single-mesh OR single-part focus isolation
+  syncExplodeDockAvailability(ctx) {
+    const isSingleMesh = !ctx || ctx.parts.length <= 1;
+    const isIsolated = Boolean(ctx && ctx.focusedPartIdx !== null);
+    const disabled = isSingleMesh || isIsolated;
+
+    const slider = document.getElementById('explode-slider');
+    const group = document.getElementById('dock-explode-group');
+    if (slider) slider.disabled = disabled;
+    if (group) {
+      group.classList.toggle('opacity-30', disabled);
+      group.classList.toggle('pointer-events-none', disabled);
+      group.title = isIsolated ? 'Explosion disabled during single-part focus' : '';
+    }
+  },
+
   updateFocusExitBar(ctx) {
     const bar = document.getElementById('focus-exit-bar');
     const label = document.getElementById('focus-part-label');
@@ -1183,6 +1403,8 @@ const StudioUI = {
     setTimeout(() => {
       overlay.classList.add('hidden');
       MotionFX.playWorkbenchEntrance();
+      const ctx = this.engine.activeCtx;
+      if (ctx && ctx.ready) this.engine.triggerModelAssemblyEntrance(ctx);
     }, 420);
   },
 
@@ -1238,6 +1460,7 @@ const StudioUI = {
     const listEl = document.getElementById('subpart-list');
     const resetBtn = document.getElementById('btn-show-all');
     this.updateFocusExitBar(ctx);
+    this.syncExplodeDockAvailability(ctx);
 
     if (!ctx || ctx.parts.length <= 1) {
       if (resetBtn) resetBtn.classList.add('hidden');
@@ -1338,6 +1561,8 @@ const StudioUI = {
   },
 
   runExplodeTo(target) {
+    const ctx = this.engine.activeCtx;
+    if (!ctx || ctx.focusedPartIdx !== null || ctx.parts.length <= 1) return;
     const expCfg = window.PortfolioConfig.explosion;
     const slider = document.getElementById('explode-slider');
     slider.value = target;
@@ -1383,10 +1608,6 @@ const StudioUI = {
       MotionFX.animateCounter(document.getElementById('spec-verts'), ctx.verts);
       MotionFX.animateCounter(document.getElementById('spec-parts'), Math.max(1, ctx.parts.length));
       document.getElementById('spec-collision-badge').textContent = ctx.collisionBadge;
-
-      const singleMesh = ctx.parts.length <= 1;
-      document.getElementById('explode-slider').disabled = singleMesh;
-      document.getElementById('dock-explode-group').classList.toggle('opacity-35', singleMesh);
 
       this.renderSubpartList(ctx, true);
     });
@@ -1438,6 +1659,8 @@ const StudioUI = {
       }
 
       if (act === 'explode-mode') {
+        const ctx = this.engine.activeCtx;
+        if (ctx && ctx.focusedPartIdx !== null) return;
         this.setExplodeModeUI(btn.dataset.mode);
         const curVal = parseFloat(document.getElementById('explode-slider').value) || 0;
         if (curVal > 0) this.engine.explode(curVal, true, expCfg.modeSwitchDurationMs);
@@ -1447,9 +1670,17 @@ const StudioUI = {
 
       if (act === 'workflow-step') {
         const wf = btn.dataset.wf;
-        if (wf === 'explode-radial') { this.setExplodeModeUI('radial'); this.runExplodeTo(expCfg.presetPercent); }
-        else if (wf === 'explode-linear') { this.setExplodeModeUI('linear'); this.runExplodeTo(expCfg.presetPercent); }
-        else if (['wire', 'clay', 'xray', 'albedo', 'rendered'].includes(wf)) {
+        if (wf === 'explode-radial') {
+          const ctx = this.engine.activeCtx;
+          if (ctx && ctx.focusedPartIdx !== null) return;
+          this.setExplodeModeUI('radial');
+          this.runExplodeTo(expCfg.presetPercent);
+        } else if (wf === 'explode-linear') {
+          const ctx = this.engine.activeCtx;
+          if (ctx && ctx.focusedPartIdx !== null) return;
+          this.setExplodeModeUI('linear');
+          this.runExplodeTo(expCfg.presetPercent);
+        } else if (['wire', 'clay', 'xray', 'albedo', 'rendered'].includes(wf)) {
           this.highlightShader(wf);
           this.engine.setShading(wf);
         }
@@ -1461,11 +1692,15 @@ const StudioUI = {
 
     const expSlider = document.getElementById('explode-slider');
     expSlider.addEventListener('input', (e) => {
+      const ctx = this.engine.activeCtx;
+      if (ctx && ctx.focusedPartIdx !== null) return;
       const val = parseFloat(e.target.value) || 0;
       document.getElementById('explode-percent').textContent = Math.round(val) + '%';
       this.engine.explode(val, false, 0);
     });
     expSlider.addEventListener('change', (e) => {
+      const ctx = this.engine.activeCtx;
+      if (ctx && ctx.focusedPartIdx !== null) return;
       this.engine.explode(e.target.value, true, expCfg.sliderReleaseDurationMs);
     });
 
