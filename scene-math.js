@@ -1,10 +1,9 @@
 /**
- * 3D 场景树递归、4x4 原地自转、紧凑防碰撞爆炸与 3D 拾取映射模块 (scene-math.js v23.0)
+ * 3D Scene Graph Traversal, In-Place World-Z Spin & AABB Explosion Solver (scene-math.js)
+ * Pure geometry-driven hierarchy extraction with zero name-based regex filtering.
  */
 window.SceneGraphMath = {
-  IGNORE_NAME_RE: /^(root|scene|world|ground|floor|plane|shadow|stage|backdrop|camera|light|env|sky|grid|base_plane|shadow_plane|sketchfab_model|gltf_scene)/i,
-
-  // ================= 4x4 列主序矩阵工具库 =================
+  // Multiply two 4x4 column-major matrices: A * B
   mulMat4(a, b) {
     const out = new Array(16);
     for (let col = 0; col < 4; col++) {
@@ -19,6 +18,7 @@ window.SceneGraphMath = {
     return out;
   },
 
+  // Invert a 4x4 column-major matrix
   invertMat4(m) {
     const out = new Array(16);
     const a00 = m[0], a01 = m[1], a02 = m[2], a03 = m[3];
@@ -56,6 +56,7 @@ window.SceneGraphMath = {
     return out;
   },
 
+  // Build 4x4 rotation matrix around world Z-axis passing through `center`
   makeWorldZSpinMatrix(center, angle) {
     const c = Math.cos(angle), s = Math.sin(angle);
     const cx = center[0], cy = center[1];
@@ -67,11 +68,24 @@ window.SceneGraphMath = {
     ];
   },
 
-  computeRootSpinLocalMatrix(rootInfo, center, angle) {
+  /**
+   * Compute exact local 4x4 matrix for a top-level spin root rotated by `angle` around `center`.
+   * Preserves `extraLocalOffset` in case a spin root is itself an exploded leaf part.
+   */
+  computeRootSpinLocalMatrix(rootInfo, center, angle, extraLocalOffset = null) {
     const mSpin = this.makeWorldZSpinMatrix(center, angle);
-    return this.mulMat4(this.mulMat4(rootInfo.invP, mSpin), rootInfo.W0);
+    let baseLocal = rootInfo.L0;
+    if (extraLocalOffset) {
+      baseLocal = rootInfo.L0.slice();
+      baseLocal[12] += extraLocalOffset[0];
+      baseLocal[13] += extraLocalOffset[1];
+      baseLocal[14] += extraLocalOffset[2];
+    }
+    const currentWorld = extraLocalOffset ? this.mulMat4(rootInfo.P, baseLocal) : rootInfo.W0;
+    return this.mulMat4(this.mulMat4(rootInfo.invP, mSpin), currentWorld);
   },
 
+  // Transform a world-space displacement vector into a node's parent local space
   worldDeltaToLocalDelta(invP4, worldVec) {
     return [
       invP4[0] * worldVec[0] + invP4[4] * worldVec[1] + invP4[8]  * worldVec[2],
@@ -91,7 +105,21 @@ window.SceneGraphMath = {
     });
   },
 
-  // 递归将每个子部件及其所有子 Geometry 节点映射到 partIdx，支持在 3D 视口里直接点选部件！
+  collectSubtreeGeometryIDs(node, nodeMap, out = [], visited = new Set()) {
+    if (!node || visited.has(node.instanceID)) return out;
+    visited.add(node.instanceID);
+    if (node.type === 'Geometry' || node.type === 'RigGeometry') {
+      out.push(node.instanceID);
+    }
+    if (Array.isArray(node.children)) {
+      node.children.forEach(ch => {
+        const obj = typeof ch === 'object' ? (nodeMap[ch.instanceID] || ch) : nodeMap[ch];
+        this.collectSubtreeGeometryIDs(obj, nodeMap, out, visited);
+      });
+    }
+    return out;
+  },
+
   buildNodeToPartIndex(rawNodes, nodeMap) {
     const map = {};
     const markSubtree = (node, partIdx, visited = new Set()) => {
@@ -137,12 +165,13 @@ window.SceneGraphMath = {
     return roots.map(r => {
       const L0 = (r.localMatrix && r.localMatrix.length === 16) ? r.localMatrix.slice() : [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
       const W0 = (r.worldMatrix && r.worldMatrix.length === 16) ? r.worldMatrix.slice() : L0.slice();
+      const P = this.mulMat4(W0, this.invertMat4(L0));
       const invP = this.mulMat4(L0, this.invertMat4(W0));
-      return { instanceID: r.instanceID, L0, W0, invP };
+      return { instanceID: r.instanceID, L0, W0, P, invP, partIdx: null };
     });
   },
 
-  checkAABBOverlap(posA, halfA, posB, halfB, padding = 1.06) {
+  checkAABBOverlap(posA, halfA, posB, halfB, padding) {
     const ox = (halfA[0] + halfB[0]) * padding - Math.abs(posA[0] - posB[0]);
     if (ox <= 0) return null;
     const oy = (halfA[1] + halfB[1]) * padding - Math.abs(posA[1] - posB[1]);
@@ -152,11 +181,13 @@ window.SceneGraphMath = {
     return [ox, oy, oz];
   },
 
-  solveWorldRadialExplosion(extracted, worldCenter, worldRadius, boxHalves) {
+  solveWorldRadialExplosion(extracted, worldCenter, worldRadius, boxHalves, expCfg) {
     const count = extracted.length;
     const goldenAngle = Math.PI * (3 - Math.sqrt(5));
     const dirs = [];
     const dists = [];
+    const natBlend = expCfg.naturalDirectionBlend;
+    const fibBlend = 1 - natBlend;
 
     let maxSpread = 0;
     extracted.forEach(p => {
@@ -177,25 +208,22 @@ window.SceneGraphMath = {
       const fib = [Math.cos(phi) * fr, Math.sin(phi) * fr, fy];
 
       if (maxSpread > 1e-4 && d > maxSpread * 0.06) {
-        const vx = (dx / d) * 0.85 + fib[0] * 0.15;
-        const vy = (dy / d) * 0.85 + fib[1] * 0.15;
-        const vz = (dz / d) * 0.85 + fib[2] * 0.15;
+        const vx = (dx / d) * natBlend + fib[0] * fibBlend;
+        const vy = (dy / d) * natBlend + fib[1] * fibBlend;
+        const vz = (dz / d) * natBlend + fib[2] * fibBlend;
         const len = Math.hypot(vx, vy, vz) || 1;
         dirs.push([vx / len, vy / len, vz / len]);
-        const radialRatio = d / maxSpread;
-        dists.push(worldRadius * (0.30 + 0.70 * radialRatio));
+        dists.push(worldRadius * (0.30 + 0.70 * (d / maxSpread)));
       } else {
         dirs.push(fib);
-        const tier = 0.42 + 0.58 * ((idx % 3) / 2);
-        dists.push(worldRadius * tier);
+        dists.push(worldRadius * (0.42 + 0.58 * ((idx % 3) / 2)));
       }
     });
 
-    // 紧凑上限钳制：绝不再炸飞过远
-    const hardCap = worldRadius * 1.35;
+    const hardCap = worldRadius * expCfg.radialHardCapMultiplier;
     let resolvedPairs = 0;
 
-    for (let iter = 0; iter < 18; iter++) {
+    for (let iter = 0; iter < expCfg.solverIterations; iter++) {
       let anyOverlap = false;
       for (let i = 0; i < count; i++) {
         for (let j = i + 1; j < count; j++) {
@@ -210,13 +238,12 @@ window.SceneGraphMath = {
             extracted[j].worldPos[2] + dirs[j][2] * dists[j]
           ];
 
-          const ov = this.checkAABBOverlap(posI, boxHalves[i], posJ, boxHalves[j], 1.06);
+          const ov = this.checkAABBOverlap(posI, boxHalves[i], posJ, boxHalves[j], expCfg.hitboxPadding);
           if (!ov) continue;
 
           anyOverlap = true;
           resolvedPairs++;
-          const minOv = Math.min(ov[0], ov[1], ov[2]);
-          const push = minOv * 0.50;
+          const push = Math.min(ov[0], ov[1], ov[2]) * 0.50;
           if (dists[i] >= dists[j]) dists[i] = Math.min(hardCap, dists[i] + push);
           else dists[j] = Math.min(hardCap, dists[j] + push);
         }
@@ -224,6 +251,7 @@ window.SceneGraphMath = {
       if (!anyOverlap) break;
     }
 
+    // Enforce zero-mean world displacement so assembly visual center remains stationary
     let mx = 0, my = 0, mz = 0;
     const rawWorldDeltas = extracted.map((p, i) => {
       const v = [dirs[i][0] * dists[i], dirs[i][1] * dists[i], dirs[i][2] * dists[i]];
@@ -238,15 +266,18 @@ window.SceneGraphMath = {
     };
   },
 
-  solveWorldLinearExplosion(extracted, worldCenter, worldRadius) {
+  solveWorldLinearExplosion(extracted, worldCenter, worldRadius, expCfg) {
     const count = extracted.length;
-    let minV = [Infinity, Infinity, Infinity], maxV = [-Infinity, -Infinity, -Infinity];
+    const minV = [Infinity, Infinity, Infinity];
+    const maxV = [-Infinity, -Infinity, -Infinity];
+
     extracted.forEach(p => {
       for (let k = 0; k < 3; k++) {
         if (p.worldPos[k] < minV[k]) minV[k] = p.worldPos[k];
         if (p.worldPos[k] > maxV[k]) maxV[k] = p.worldPos[k];
       }
     });
+
     const spans = [maxV[0] - minV[0], maxV[1] - minV[1], maxV[2] - minV[2]];
     let mainAxis = 0;
     if (spans[1] > spans[mainAxis]) mainAxis = 1;
@@ -255,8 +286,7 @@ window.SceneGraphMath = {
     const order = extracted.map((p, idx) => ({ idx, val: p.worldPos[mainAxis] }));
     order.sort((a, b) => a.val - b.val);
 
-    // 线性跨度也同步收紧至紧凑区间
-    const halfSpan = worldRadius * 1.55;
+    const halfSpan = worldRadius * expCfg.linearHalfSpanMultiplier;
     const worldDeltas = new Array(count);
 
     order.forEach((item, rank) => {
@@ -267,7 +297,7 @@ window.SceneGraphMath = {
         if (k === mainAxis) {
           delta[k] = (worldCenter[k] + u * halfSpan) - extracted[i].worldPos[k];
         } else {
-          delta[k] = (worldCenter[k] - extracted[i].worldPos[k]) * 0.50;
+          delta[k] = (worldCenter[k] - extracted[i].worldPos[k]) * expCfg.linearOffAxisPull;
         }
       }
       worldDeltas[i] = delta;
@@ -276,16 +306,21 @@ window.SceneGraphMath = {
     return worldDeltas;
   },
 
-  evaluateExplosionFrame(parts, percent, mode = 'cardinal') {
-    const count = parts.length;
-    if (count <= 1) return [];
+  getPartLocalOffset(part, percent, mode = 'radial') {
+    const t = Math.max(0, Math.min(1, (parseFloat(percent) || 0) / 100));
+    if (t <= 1e-4) return [0, 0, 0];
+    const delta = mode === 'linear' ? part.linearDelta : part.radialDelta;
+    return [delta[0] * t, delta[1] * t, delta[2] * t];
+  },
 
+  evaluateExplosionFrame(parts, percent, mode = 'radial') {
+    if (parts.length <= 1) return [];
     const t = Math.max(0, Math.min(1, (parseFloat(percent) || 0) / 100));
     if (t <= 1e-4) return parts.map(p => p.origPos.slice());
 
     const isLinear = mode === 'linear';
     return parts.map(p => {
-      const delta = isLinear ? p.linearDelta : p.cardinalDelta;
+      const delta = isLinear ? p.linearDelta : p.radialDelta;
       return [
         p.origPos[0] + delta[0] * t,
         p.origPos[1] + delta[1] * t,
@@ -295,14 +330,20 @@ window.SceneGraphMath = {
   },
 
   analyzeAndBuildVectors(nodeMap, camDist = 4.0) {
-    if (!nodeMap) return { parts: [], spinRoots: [], nodeToPartIndex: {}, strategy: 'NONE', collisionBadge: '' };
+    const expCfg = window.PortfolioConfig.explosion;
+    if (!nodeMap) {
+      return { parts: [], spinRoots: [], nodeToPartIndex: {}, allGeometryIDs: [], collisionBadge: '' };
+    }
     const allNodes = Object.values(nodeMap);
     const spinRoots = this.findTopLevelSpinRoots(nodeMap);
 
+    const allGeometryIDs = allNodes
+      .filter(n => n.type === 'Geometry' || n.type === 'RigGeometry')
+      .map(n => n.instanceID);
+
+    // Extract deepest geometry-bearing MatrixTransform nodes with zero name filtering
     const leafTransforms = allNodes.filter(n => {
       if (n.type !== 'MatrixTransform' || !this.hasGeometryInSubtree(n, nodeMap)) return false;
-      const name = (n.name || '').trim();
-      if (this.IGNORE_NAME_RE.test(name)) return false;
 
       let hasDeeperTransform = false;
       const checkDeeper = (curr, visited = new Set()) => {
@@ -337,29 +378,37 @@ window.SceneGraphMath = {
     const nodeToPartIndex = this.buildNodeToPartIndex(rawNodes, nodeMap);
     const count = rawNodes.length;
 
+    // Link spinRoots that happen to be explodable leaf parts so spin never overwrites explosion
+    const partIdMap = new Map(rawNodes.map((n, idx) => [n.instanceID, idx]));
+    spinRoots.forEach(r => {
+      if (partIdMap.has(r.instanceID)) r.partIdx = partIdMap.get(r.instanceID);
+    });
+
     if (count <= 1) {
       return {
         parts: rawNodes.map(n => ({
           instanceID: n.instanceID,
-          name: n.name || 'Merged_Mesh',
-          origPos: n.localMatrix ? [n.localMatrix[12] || 0, n.localMatrix[13] || 0, n.localMatrix[14] || 0] : [0, 0, 0]
+          name: (n.name || 'Merged_Mesh').replace(/_/g, ' '),
+          origPos: n.localMatrix ? [n.localMatrix[12] || 0, n.localMatrix[13] || 0, n.localMatrix[14] || 0] : [0, 0, 0],
+          geoIDs: this.collectSubtreeGeometryIDs(n, nodeMap)
         })),
         spinRoots,
         nodeToPartIndex,
-        strategy: 'SINGLE MESH',
-        collisionBadge: '1 MESH'
+        allGeometryIDs,
+        collisionBadge: 'SINGLE MESH'
       };
     }
 
-    const extracted = rawNodes.map(n => {
+    const extracted = rawNodes.map((n, idx) => {
       const L0 = (n.localMatrix && n.localMatrix.length === 16) ? n.localMatrix : [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1];
       const W0 = (n.worldMatrix && n.worldMatrix.length === 16) ? n.worldMatrix : L0;
       const invP4 = this.mulMat4(L0, this.invertMat4(W0));
       return {
         instanceID: n.instanceID,
-        name: (n.name || `Part_${n.instanceID}`).replace(/_/g, ' '),
+        name: (n.name || `Part_${idx + 1}`).replace(/_/g, ' '),
         origPos: [L0[12] || 0, L0[13] || 0, L0[14] || 0],
         worldPos: [W0[12] || 0, W0[13] || 0, W0[14] || 0],
+        geoIDs: this.collectSubtreeGeometryIDs(n, nodeMap),
         invP4
       };
     });
@@ -369,19 +418,21 @@ window.SceneGraphMath = {
     wcx /= count; wcy /= count; wcz /= count;
     const worldCenter = [wcx, wcy, wcz];
 
-    // 🎯 爆炸半径大幅收紧至 6.5% 相机视距（比之前缩小 57%，紧凑利落不飞散！）
-    const worldRadius = Math.max(0.02, camDist * 0.065);
-    const boxHalves = extracted.map(() => [worldRadius * 0.14, worldRadius * 0.14, worldRadius * 0.14]);
+    const worldRadius = Math.max(expCfg.minWorldRadius, camDist * expCfg.worldRadiusRatio);
+    const halfExt = worldRadius * expCfg.hitboxHalfSizeRatio;
+    const boxHalves = extracted.map(() => [halfExt, halfExt, halfExt]);
 
-    const radialRes = this.solveWorldRadialExplosion(extracted, worldCenter, worldRadius, boxHalves);
-    const linearWorldDeltas = this.solveWorldLinearExplosion(extracted, worldCenter, worldRadius);
+    const radialRes = this.solveWorldRadialExplosion(extracted, worldCenter, worldRadius, boxHalves, expCfg);
+    const linearWorldDeltas = this.solveWorldLinearExplosion(extracted, worldCenter, worldRadius, expCfg);
 
     const parts = extracted.map((p, idx) => ({
       instanceID: p.instanceID,
       name: p.name,
       origPos: p.origPos,
       worldPos: p.worldPos,
-      cardinalDelta: this.worldDeltaToLocalDelta(p.invP4, radialRes.worldDeltas[idx]),
+      geoIDs: p.geoIDs,
+      isSpinRoot: partIdMap.has(p.instanceID) && spinRoots.some(r => r.instanceID === p.instanceID),
+      radialDelta: this.worldDeltaToLocalDelta(p.invP4, radialRes.worldDeltas[idx]),
       linearDelta: this.worldDeltaToLocalDelta(p.invP4, linearWorldDeltas[idx])
     }));
 
@@ -389,8 +440,8 @@ window.SceneGraphMath = {
       parts,
       spinRoots,
       nodeToPartIndex,
-      strategy: `${count} PARTS`,
-      collisionBadge: `AABB 避让 ${radialRes.resolvedPairs} 次`
+      allGeometryIDs,
+      collisionBadge: `AABB · ${radialRes.resolvedPairs} RESOLVED`
     };
   }
 };
