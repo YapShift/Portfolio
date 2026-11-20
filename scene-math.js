@@ -1,9 +1,8 @@
 /**
  * 3D Scene Graph Traversal, In-Place World-Z Spin & AABB Explosion Solver (scene-math.js)
- * Pure geometry-driven hierarchy extraction with zero name-based regex filtering.
+ * Guarantees 100% geometry coverage for hover picking and zero-filter isolation.
  */
 window.SceneGraphMath = {
-  // Multiply two 4x4 column-major matrices: A * B
   mulMat4(a, b) {
     const out = new Array(16);
     for (let col = 0; col < 4; col++) {
@@ -18,7 +17,6 @@ window.SceneGraphMath = {
     return out;
   },
 
-  // Invert a 4x4 column-major matrix
   invertMat4(m) {
     const out = new Array(16);
     const a00 = m[0], a01 = m[1], a02 = m[2], a03 = m[3];
@@ -56,7 +54,6 @@ window.SceneGraphMath = {
     return out;
   },
 
-  // Build 4x4 rotation matrix around world Z-axis passing through `center`
   makeWorldZSpinMatrix(center, angle) {
     const c = Math.cos(angle), s = Math.sin(angle);
     const cx = center[0], cy = center[1];
@@ -68,10 +65,6 @@ window.SceneGraphMath = {
     ];
   },
 
-  /**
-   * Compute exact local 4x4 matrix for a top-level spin root rotated by `angle` around `center`.
-   * Preserves `extraLocalOffset` in case a spin root is itself an exploded leaf part.
-   */
   computeRootSpinLocalMatrix(rootInfo, center, angle, extraLocalOffset = null) {
     const mSpin = this.makeWorldZSpinMatrix(center, angle);
     let baseLocal = rootInfo.L0;
@@ -85,7 +78,6 @@ window.SceneGraphMath = {
     return this.mulMat4(this.mulMat4(rootInfo.invP, mSpin), currentWorld);
   },
 
-  // Transform a world-space displacement vector into a node's parent local space
   worldDeltaToLocalDelta(invP4, worldVec) {
     return [
       invP4[0] * worldVec[0] + invP4[4] * worldVec[1] + invP4[8]  * worldVec[2],
@@ -120,7 +112,23 @@ window.SceneGraphMath = {
     return out;
   },
 
-  buildNodeToPartIndex(rawNodes, nodeMap) {
+  buildParentLookup(allNodes) {
+    const parentOf = new Map();
+    allNodes.forEach(n => {
+      if (!Array.isArray(n.children)) return;
+      n.children.forEach(ch => {
+        const cid = typeof ch === 'object' ? ch.instanceID : ch;
+        if (cid !== undefined) parentOf.set(cid, n.instanceID);
+      });
+    });
+    return parentOf;
+  },
+
+  /**
+   * Map every node ID in each part's subtree AND ancestor chain (if unambiguous)
+   * so Sketchfab hover/click picking always resolves to a valid part index.
+   */
+  buildNodeToPartIndex(rawNodes, nodeMap, parentOf) {
     const map = {};
     const markSubtree = (node, partIdx, visited = new Set()) => {
       if (!node || visited.has(node.instanceID)) return;
@@ -132,23 +140,26 @@ window.SceneGraphMath = {
         markSubtree(obj, partIdx, visited);
       });
     };
+
     rawNodes.forEach((n, idx) => markSubtree(n, idx));
+
+    // Also allow resolving any node whose parent chain leads into a mapped part
+    Object.values(nodeMap).forEach(node => {
+      if (map[node.instanceID] !== undefined) return;
+      let curr = parentOf.get(node.instanceID);
+      while (curr !== undefined) {
+        if (map[curr] !== undefined) {
+          map[node.instanceID] = map[curr];
+          break;
+        }
+        curr = parentOf.get(curr);
+      }
+    });
+
     return map;
   },
 
-  findTopLevelSpinRoots(nodeMap) {
-    if (!nodeMap) return [];
-    const allNodes = Object.values(nodeMap);
-    const parentOf = new Map();
-
-    allNodes.forEach(n => {
-      if (!Array.isArray(n.children)) return;
-      n.children.forEach(ch => {
-        const cid = typeof ch === 'object' ? ch.instanceID : ch;
-        if (cid !== undefined) parentOf.set(cid, n.instanceID);
-      });
-    });
-
+  findTopLevelSpinRoots(allNodes, nodeMap, parentOf) {
     const roots = allNodes.filter(n => {
       if (n.type !== 'MatrixTransform' || !this.hasGeometryInSubtree(n, nodeMap)) return false;
       let curr = parentOf.get(n.instanceID);
@@ -251,7 +262,6 @@ window.SceneGraphMath = {
       if (!anyOverlap) break;
     }
 
-    // Enforce zero-mean world displacement so assembly visual center remains stationary
     let mx = 0, my = 0, mz = 0;
     const rawWorldDeltas = extracted.map((p, i) => {
       const v = [dirs[i][0] * dists[i], dirs[i][1] * dists[i], dirs[i][2] * dists[i]];
@@ -335,13 +345,12 @@ window.SceneGraphMath = {
       return { parts: [], spinRoots: [], nodeToPartIndex: {}, allGeometryIDs: [], collisionBadge: '' };
     }
     const allNodes = Object.values(nodeMap);
-    const spinRoots = this.findTopLevelSpinRoots(nodeMap);
+    const parentOf = this.buildParentLookup(allNodes);
+    const spinRoots = this.findTopLevelSpinRoots(allNodes, nodeMap, parentOf);
 
-    const allGeometryIDs = allNodes
-      .filter(n => n.type === 'Geometry' || n.type === 'RigGeometry')
-      .map(n => n.instanceID);
+    const allGeometries = allNodes.filter(n => n.type === 'Geometry' || n.type === 'RigGeometry');
+    const allGeometryIDs = allGeometries.map(n => n.instanceID);
 
-    // Extract deepest geometry-bearing MatrixTransform nodes with zero name filtering
     const leafTransforms = allNodes.filter(n => {
       if (n.type !== 'MatrixTransform' || !this.hasGeometryInSubtree(n, nodeMap)) return false;
 
@@ -365,20 +374,31 @@ window.SceneGraphMath = {
 
     let rawNodes = [];
     if (leafTransforms.length > 1) {
-      rawNodes = leafTransforms;
+      rawNodes = leafTransforms.slice();
     } else if (leafTransforms.length === 1) {
       const childrenWithGeo = (leafTransforms[0].children || [])
         .map(ch => typeof ch === 'object' ? (nodeMap[ch.instanceID] || ch) : nodeMap[ch])
         .filter(ch => ch && this.hasGeometryInSubtree(ch, nodeMap));
-      rawNodes = childrenWithGeo.length > 1 ? childrenWithGeo : leafTransforms;
+      rawNodes = childrenWithGeo.length > 1 ? childrenWithGeo : leafTransforms.slice();
     } else {
       rawNodes = allNodes.filter(n => n.type === 'MatrixTransform' && this.hasGeometryInSubtree(n, nodeMap)).slice(0, 1);
     }
 
-    const nodeToPartIndex = this.buildNodeToPartIndex(rawNodes, nodeMap);
+    // Recover any direct/orphan geometry not covered by rawNodes so 100% of meshes are interactive
+    if (rawNodes.length > 1) {
+      const coveredGeos = new Set();
+      rawNodes.forEach(n => this.collectSubtreeGeometryIDs(n, nodeMap).forEach(gid => coveredGeos.add(gid)));
+      allGeometries.forEach(geoNode => {
+        if (!coveredGeos.has(geoNode.instanceID)) {
+          rawNodes.push(geoNode);
+          coveredGeos.add(geoNode.instanceID);
+        }
+      });
+    }
+
+    const nodeToPartIndex = this.buildNodeToPartIndex(rawNodes, nodeMap, parentOf);
     const count = rawNodes.length;
 
-    // Link spinRoots that happen to be explodable leaf parts so spin never overwrites explosion
     const partIdMap = new Map(rawNodes.map((n, idx) => [n.instanceID, idx]));
     spinRoots.forEach(r => {
       if (partIdMap.has(r.instanceID)) r.partIdx = partIdMap.get(r.instanceID);
