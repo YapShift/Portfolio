@@ -8,7 +8,17 @@
   <meta http-equiv="Expires" content="0" />
   <title>YAPSHIFT — 3D Industrial & Technical Art Portfolio</title>
   <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://static.sketchfab.com/api/sketchfab-viewer-1.12.1.js"></script>
+
+  <!-- Three.js r170 ES Module Import Map -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@500;600;700&display=swap');
 
@@ -21,7 +31,7 @@
       --accent: #e05a2b;
       --text-primary: #f4f4f5;
 
-      /* Exclusive custom SVG hardware cursors active across 100% of the viewport */
+      /* Exclusive custom SVG hardware cursors active natively over 100% of the WebGL canvas */
       --cursor-default: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='%23f4f4f5' stroke-width='1.4'%3E%3Cpath d='M12 4v5M12 15v5M4 12h5M15 12h5' stroke-opacity='0.88'/%3E%3C/g%3E%3Ccircle cx='12' cy='12' r='1.6' fill='%23e05a2b'/%3E%3C/svg%3E") 12 12, crosshair;
       --cursor-pointer: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M12 5l7 7-7 7-7-7z' fill='rgba(224,90,43,0.18)' stroke='%23e05a2b' stroke-width='1.5'/%3E%3Ccircle cx='12' cy='12' r='1.8' fill='%23ffffff'/%3E%3C/svg%3E") 12 12, pointer;
       --cursor-grabbing: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='6' fill='rgba(224,90,43,0.15)' stroke='%23e05a2b' stroke-width='1.5' stroke-dasharray='3 2'/%3E%3Ccircle cx='12' cy='12' r='2' fill='%23ffffff'/%3E%3C/svg%3E") 12 12, grabbing;
@@ -46,11 +56,13 @@
       cursor: var(--cursor-pointer) !important;
     }
 
-    #viewport-proxy-layer {
+    #webgl-viewport canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
       cursor: var(--cursor-default);
-      touch-action: none;
     }
-    #viewport-proxy-layer.is-orbiting {
+    #webgl-viewport.is-orbiting canvas {
       cursor: var(--cursor-grabbing);
     }
 
@@ -249,11 +261,8 @@
   <!-- Precision interactive dot/crosshair matrix & breathing reticle canvas -->
   <canvas id="anime-bg-canvas" class="fixed inset-0 w-full h-full pointer-events-none z-0"></canvas>
 
-  <!-- Fullscreen multi-iframe parallel WebGL cache pool (pointer-events permanently disabled) -->
-  <div id="sketchfab-viewport-pool" class="fixed inset-0 w-full h-full pointer-events-none z-10"></div>
-
-  <!-- Transparent Proxy Interaction Layer: owns 100% of 3D orbit/pan/zoom, raycast hover & custom cursor -->
-  <div id="viewport-proxy-layer" class="fixed inset-0 w-full h-full z-[15]"></div>
+  <!-- Native Fullscreen Three.js WebGL Viewport -->
+  <div id="webgl-viewport" class="fixed inset-0 w-full h-full z-10"></div>
 
   <!-- Exclusive Tactical Cursor & Linked CAD Part-Name Callout -->
   <div id="yapshift-cursor-hud" class="opacity-0" style="transform: translate3d(-9999px, -9999px, 0);">
@@ -323,9 +332,9 @@
   <!-- =========================================================
        STAGE 02: Fullscreen 3D Workbench HUD
        ========================================================= -->
-  <div id="loading-overlay" class="fixed inset-0 z-[18] bg-[#09090b]/80 flex flex-col items-center justify-center gap-3 transition-opacity duration-300 opacity-0 pointer-events-none">
-    <div class="w-7 h-7 border-[1.5px] border-[#e05a2b] border-t-transparent rounded-full animate-spin"></div>
-    <div class="text-[11px] font-mono tracking-[0.2em] text-zinc-400">LOADING MODEL</div>
+  <div id="loading-overlay" class="fixed inset-0 z-[18] bg-[#09090b]/82 flex flex-col items-center justify-center gap-3 transition-opacity duration-300 opacity-0 pointer-events-none px-6 text-center">
+    <div id="loading-spinner" class="w-7 h-7 border-[1.5px] border-[#e05a2b] border-t-transparent rounded-full animate-spin"></div>
+    <div id="loading-text" class="text-[11px] font-mono tracking-[0.18em] text-zinc-400">LOADING GLB MODEL</div>
   </div>
 
   <!-- Top-Left: Brand & Asset Switcher -->
@@ -359,7 +368,7 @@
 
       <div class="w-[1px] h-3.5 bg-white/10"></div>
 
-      <div class="flex items-center gap-2" title="Rotate HDRI environment lighting">
+      <div class="flex items-center gap-2" title="Rotate Studio IBL environment lighting">
         <svg class="w-3.5 h-3.5 text-zinc-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>
         <input id="light-slider" type="range" min="0" max="360" value="0" class="arch-slider w-16" />
         <span id="light-deg" class="text-zinc-400 w-7 text-right">0°</span>
@@ -448,19 +457,19 @@
     </div>
   </footer>
 
-  <!-- Sequential cache-busting loader -->
+  <!-- Load config first, then boot Three.js ES module engine with cache busting -->
   <script>
-    (function loadFreshScripts() {
+    (function bootStudio() {
       const bust = Date.now();
-      const files = ['./config.js', './scene-math.js', './app-engine.js'];
-      const loadNext = (idx) => {
-        if (idx >= files.length) return;
-        const script = document.createElement('script');
-        script.src = files[idx] + '?t=' + bust;
-        script.onload = () => loadNext(idx + 1);
-        document.body.appendChild(script);
+      const cfgScript = document.createElement('script');
+      cfgScript.src = './config.js?t=' + bust;
+      cfgScript.onload = () => {
+        const modScript = document.createElement('script');
+        modScript.type = 'module';
+        modScript.src = './app-engine.js?t=' + bust;
+        document.body.appendChild(modScript);
       };
-      loadNext(0);
+      document.body.appendChild(cfgScript);
     })();
   </script>
 </body>
