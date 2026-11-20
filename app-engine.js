@@ -1,5 +1,5 @@
 /**
- * YapShift Native Three.js 3D Workbench Engine (app-engine.js v32.0)
+ * YapShift Native Three.js 3D Workbench Engine (app-engine.js v32.1)
  * - X-Ray compatible Screen-Space Silhouette Mask Outline (zero interior bleed, zero hard-edge cracks)
  * - Anime.js-inspired 3D model kinetic choreography (staggered spring assembly, elastic wave explosion,
  *   spring hover micro-pop, subtle weightless levitation)
@@ -161,7 +161,7 @@ const MotionFX = {
     window.anime({
       targets: '#hero-overlay .hero-stagger, #hero-features .arch-card',
       translateY: [22, 0],
-      opacity:,
+      opacity: [0, 1],
       duration: 760,
       delay: window.anime.stagger(65, { start: 80 }),
       easing: 'easeOutExpo'
@@ -173,7 +173,7 @@ const MotionFX = {
     window.anime({
       targets: '.hud-stagger',
       translateY: [16, 0],
-      opacity:,
+      opacity: [0, 1],
       duration: 620,
       delay: window.anime.stagger(75),
       easing: 'easeOutExpo'
@@ -202,7 +202,7 @@ const MotionFX = {
     window.anime({
       targets: '#subpart-list .part-row',
       translateX: [12, 0],
-      opacity:,
+      opacity: [0, 1],
       duration: 420,
       delay: window.anime.stagger(18),
       easing: 'easeOutExpo'
