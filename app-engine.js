@@ -1,7 +1,9 @@
 /**
- * YapShift 3D Workbench Engine (app-engine.js)
- * Orchestrates multi-iframe WebGL caching, uninterrupted auto-resuming spin,
- * custom tactical cursor HUD, and linked CAD part-name callouts.
+ * YapShift 3D Workbench Engine (app-engine.js v28.0 — Full Proxy Cursor Ownership)
+ * Transparent proxy layer reclaims 100% mouse control over Sketchfab iframes:
+ *  - Custom SVG crosshair + smooth 60FPS tactical reticle everywhere over the 3D viewport
+ *  - Live `api.pickFromScreen` raycasting displays linked CAD part callout right beside cursor (only when not isolated)
+ *  - Custom damped spherical orbit / pan / wheel zoom with 100% reliable auto-spin resume after movement ends
  */
 
 const EventBus = {
@@ -14,58 +16,53 @@ const EventBus = {
  * Exclusive Tactical Cursor Follower & Linked CAD Part-Name Callout System
  */
 const CustomCursorHUD = {
-  el: null,
-  idxEl: null,
-  nameEl: null,
+  el: null, idxEl: null, nameEl: null,
   x: -9999, y: -9999,
   tx: -9999, ty: -9999,
   visible: false,
   lockedPartActive: false,
 
   init() {
-    const curCfg = window.PortfolioConfig.cursor;
-    if (!curCfg.enabled) return;
-
+    if (!window.PortfolioConfig.cursor.enabled) return;
     this.el = document.getElementById('yapshift-cursor-hud');
     this.idxEl = document.getElementById('cursor-part-idx');
     this.nameEl = document.getElementById('cursor-part-name');
     if (!this.el) return;
 
-    // Track pointer smoothly across all parent UI surfaces
+    // Because iframes have pointer-events: none, window mousemove fires continuously over 100% of the screen!
     window.addEventListener('mousemove', (e) => {
-      this.setTarget(e.clientX, e.clientY, false);
+      this.setTarget(e.clientX, e.clientY);
       const isCtrl = Boolean(e.target.closest('button, a, input, [data-action]'));
       this.el.classList.toggle('is-interactive', isCtrl && !this.lockedPartActive);
     }, { passive: true });
 
-    // Hide trailing ring when pointer enters cross-origin iframe empty space (until a 3D part is hovered)
-    const pool = document.getElementById('sketchfab-viewport-pool');
-    if (pool) {
-      pool.addEventListener('mouseenter', () => {
-        if (!this.lockedPartActive) this.hide();
-      });
-    }
     document.addEventListener('mouseleave', () => this.hide());
-
     requestAnimationFrame(() => this.loop());
   },
 
-  setTarget(clientX, clientY, snapImmediately = false) {
+  setTarget(clientX, clientY) {
     if (!this.el) return;
     this.tx = clientX;
     this.ty = clientY;
-    if (snapImmediately || !this.visible) {
+    if (!this.visible) {
       this.x = clientX;
       this.y = clientY;
+      this.visible = true;
+      this.el.classList.remove('opacity-0');
     }
-    this.show();
     const flipLimit = window.PortfolioConfig.cursor.flipLeftThresholdPx;
     this.el.classList.toggle('flip-left', clientX > window.innerWidth - flipLimit);
   },
 
-  lockOnPart(part, idx, coords) {
+  setDragging(active) {
+    if (!this.el) return;
+    this.el.classList.toggle('is-dragging', active);
+    if (active) this.unlockPart();
+  },
+
+  lockOnPart(part, idx) {
     if (!this.el || !part || idx === null) {
-      this.unlockPart(false);
+      this.unlockPart();
       return;
     }
     this.lockedPartActive = true;
@@ -73,30 +70,19 @@ const CustomCursorHUD = {
     this.nameEl.textContent = part.name;
     this.el.classList.remove('is-interactive');
     this.el.classList.add('is-part-lock');
-
-    if (coords && Number.isFinite(coords[0]) && Number.isFinite(coords[1])) {
-      this.setTarget(coords[0], coords[1], true);
-    }
   },
 
-  unlockPart(keepCursorVisible = false) {
+  unlockPart() {
     if (!this.el) return;
     this.lockedPartActive = false;
     this.el.classList.remove('is-part-lock');
-    if (!keepCursorVisible) this.hide();
-  },
-
-  show() {
-    if (!this.el || this.visible) return;
-    this.visible = true;
-    this.el.classList.remove('opacity-0');
   },
 
   hide() {
-    if (!this.el || !this.visible) return;
+    if (!this.el) return;
     this.visible = false;
     this.lockedPartActive = false;
-    this.el.classList.remove('is-part-lock', 'is-interactive');
+    this.el.classList.remove('is-part-lock', 'is-interactive', 'is-dragging');
     this.el.classList.add('opacity-0');
   },
 
@@ -111,7 +97,7 @@ const CustomCursorHUD = {
 };
 
 /**
- * Batched 2D Canvas architectural grid & breathing reticle stage
+ * Batched 2D Canvas Architectural Grid & Breathing Reticle Stage
  */
 const AnimeGridStage = {
   canvas: null, ctx: null, w: 0, h: 0, dpr: 1,
@@ -274,41 +260,290 @@ const AnimeGridStage = {
 };
 
 /**
- * Multi-Iframe Parallel Sketchfab WebGL Pool Engine
+ * Multi-Iframe Parallel Sketchfab Engine + Custom Proxy Camera & Raycast Controller
  */
 class SketchfabPoolEngine {
   constructor() {
     const cfg = window.PortfolioConfig;
     this.poolContainer = document.getElementById('sketchfab-viewport-pool');
+    this.proxyLayer = document.getElementById('viewport-proxy-layer');
     this.instances = new Map();
     this.activeAssetId = null;
     this.mode = 'radial';
     this.autoSpinEnabled = cfg.turntable.enabledByDefault;
     this.lastSpinTick = 0;
-    this.bindGlobalInteractionFallback();
+    this.lastCamSyncTick = 0;
+
+    // Proxy pointer interaction state
+    this.dragMode = null; // 'orbit' | 'pan' | null
+    this.dragStart = { x: 0, y: 0 };
+    this.dragLast = { x: 0, y: 0 };
+    this.dragMoved = false;
+    this.lastHoverPickTs = 0;
+    this.hoverPickInFlight = false;
+
+    this.bindProxyInteraction();
+    this.startCameraDampingLoop();
     this.startInPlaceSpinLoop();
   }
 
   get activeCtx() { return this.instances.get(this.activeAssetId) || null; }
   get ready() { const ctx = this.activeCtx; return Boolean(ctx && ctx.ready); }
 
-  // Failsafe listener in case pointer drag starts inside iframe and releases outside
-  bindGlobalInteractionFallback() {
-    const scheduleResume = () => {
-      const ctx = this.activeCtx;
-      if (!ctx || !ctx.userInteracting) return;
-      this.scheduleSpinResume(ctx, window.PortfolioConfig.turntable.resumeAfterCameraIdleMs);
-    };
-    window.addEventListener('pointerup', scheduleResume, { passive: true });
-    window.addEventListener('touchend', scheduleResume, { passive: true });
+  // Convert Cartesian (position, target) into Z-Up spherical camera parameters
+  cartesianToSpherical(position, target) {
+    const dx = position[0] - target[0];
+    const dy = position[1] - target[1];
+    const dz = position[2] - target[2];
+    const radius = Math.max(1e-4, Math.hypot(dx, dy, dz));
+    const theta = Math.atan2(dy, dx);
+    const phi = Math.asin(Math.max(-1, Math.min(1, dz / radius)));
+    return { theta, phi, radius, target: target.slice() };
   }
 
-  scheduleSpinResume(ctx, delayMs) {
+  // Convert Z-Up spherical parameters back to Cartesian eye position
+  sphericalToEye(cam) {
+    const cosPhi = Math.cos(cam.phi);
+    return [
+      cam.target[0] + cam.radius * cosPhi * Math.cos(cam.theta),
+      cam.target[1] + cam.radius * cosPhi * Math.sin(cam.theta),
+      cam.target[2] + cam.radius * Math.sin(cam.phi)
+    ];
+  }
+
+  initSphericalState(ctx, position, target) {
+    const s = this.cartesianToSpherical(position, target);
+    ctx.cam = {
+      theta: s.theta, phi: s.phi, radius: s.radius, target: s.target.slice(),
+      curTheta: s.theta, curPhi: s.phi, curRadius: s.radius, curTarget: s.target.slice(),
+      baseRadius: s.radius,
+      dirty: false
+    };
+  }
+
+  syncSphericalFromAPI(ctx) {
+    if (!ctx || !ctx.api) return;
+    ctx.api.getCameraLookAt((err, cam) => {
+      if (err || !cam) return;
+      const s = this.cartesianToSpherical(cam.position, cam.target);
+      const zoomMult = ctx.focusedPartIdx === null ? this.getZoomMultiplier(ctx.explodeVal) : 1;
+      ctx.cam = {
+        theta: s.theta, phi: s.phi, radius: s.radius, target: s.target.slice(),
+        curTheta: s.theta, curPhi: s.phi, curRadius: s.radius, curTarget: s.target.slice(),
+        baseRadius: s.radius / zoomMult,
+        dirty: false
+      };
+    });
+  }
+
+  scheduleSpinResume(ctx) {
+    const delayMs = window.PortfolioConfig.turntable.resumeAfterCameraIdleMs;
     if (ctx.interactTimer) clearTimeout(ctx.interactTimer);
-    if (ctx.watchdogTimer) clearTimeout(ctx.watchdogTimer);
     ctx.interactTimer = setTimeout(() => {
       ctx.userInteracting = false;
     }, delayMs);
+  }
+
+  // Bind full pointer, wheel, hover-raycast, and click-to-focus events on transparent proxy layer
+  bindProxyInteraction() {
+    if (!this.proxyLayer) return;
+    const pCfg = window.PortfolioConfig.cameraProxy;
+
+    this.proxyLayer.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    this.proxyLayer.addEventListener('pointerdown', (e) => {
+      const ctx = this.activeCtx;
+      if (!ctx || !ctx.ready || !ctx.cam) return;
+
+      this.proxyLayer.setPointerCapture(e.pointerId);
+      this.dragMode = (e.button === 2 || e.button === 1 || e.shiftKey) ? 'pan' : 'orbit';
+      this.dragStart = { x: e.clientX, y: e.clientY };
+      this.dragLast = { x: e.clientX, y: e.clientY };
+      this.dragMoved = false;
+
+      // Immediately pause turntable spin while user controls the camera
+      ctx.userInteracting = true;
+      if (ctx.interactTimer) clearTimeout(ctx.interactTimer);
+
+      this.proxyLayer.classList.add('is-orbiting');
+      CustomCursorHUD.setDragging(true);
+      this.clearHover();
+    });
+
+    this.proxyLayer.addEventListener('pointermove', (e) => {
+      const ctx = this.activeCtx;
+      if (!ctx || !ctx.ready || !ctx.cam) return;
+
+      if (this.dragMode) {
+        const dx = e.clientX - this.dragLast.x;
+        const dy = e.clientY - this.dragLast.y;
+        this.dragLast = { x: e.clientX, y: e.clientY };
+
+        if (!this.dragMoved) {
+          const totalDist = Math.hypot(e.clientX - this.dragStart.x, e.clientY - this.dragStart.y);
+          if (totalDist > pCfg.dragClickThresholdPx) this.dragMoved = true;
+        }
+
+        if (this.dragMode === 'orbit') {
+          ctx.cam.theta -= dx * pCfg.orbitSensitivity;
+          ctx.cam.phi = Math.max(pCfg.minPitchRad, Math.min(pCfg.maxPitchRad, ctx.cam.phi + dy * pCfg.orbitSensitivity));
+          ctx.cam.dirty = true;
+        } else if (this.dragMode === 'pan') {
+          const eye = this.sphericalToEye(ctx.cam);
+          const fx = ctx.cam.target[0] - eye[0];
+          const fy = ctx.cam.target[1] - eye[1];
+          const fz = ctx.cam.target[2] - eye[2];
+          const fLen = Math.hypot(fx, fy, fz) || 1;
+          const fwd = [fx / fLen, fy / fLen, fz / fLen];
+
+          // Right = normalize(cross(fwd, [0, 0, 1]))
+          let rx = fwd[1], ry = -fwd[0], rz = 0;
+          const rLen = Math.hypot(rx, ry) || 1;
+          rx /= rLen; ry /= rLen;
+
+          // Up = cross(right, fwd)
+          const ux = ry * fwd[2] - rz * fwd[1];
+          const uy = rz * fwd[0] - rx * fwd[2];
+          const uz = rx * fwd[1] - ry * fwd[0];
+
+          const panScale = ctx.cam.radius * pCfg.panSensitivity;
+          ctx.cam.target[0] += (-dx * rx + dy * ux) * panScale;
+          ctx.cam.target[1] += (-dx * ry + dy * uy) * panScale;
+          ctx.cam.target[2] += (-dx * rz + dy * uz) * panScale;
+          ctx.cam.dirty = true;
+        }
+        return;
+      }
+
+      // Not dragging: perform throttled 3D raycast picking under exact cursor position (only when not isolated)
+      const onlyWhenUnfocused = window.PortfolioConfig.cursor.showPartLabelOnlyWhenUnfocused;
+      if (ctx.parts.length <= 1 || (onlyWhenUnfocused && ctx.focusedPartIdx !== null)) return;
+
+      const now = performance.now();
+      if (now - this.lastHoverPickTs < pCfg.hoverPickThrottleMs || this.hoverPickInFlight) return;
+      this.lastHoverPickTs = now;
+      this.pickUnderCursor(ctx, e.clientX, e.clientY, false);
+    });
+
+    const endDrag = (e) => {
+      if (!this.dragMode) return;
+      const wasClick = !this.dragMoved && this.dragMode === 'orbit';
+      this.dragMode = null;
+      this.proxyLayer.classList.remove('is-orbiting');
+      CustomCursorHUD.setDragging(false);
+
+      const ctx = this.activeCtx;
+      if (!ctx || !ctx.ready) return;
+
+      // Always resume turntable spin smoothly after camera movement finishes!
+      this.scheduleSpinResume(ctx);
+
+      if (wasClick && ctx.parts.length > 1) {
+        this.pickUnderCursor(ctx, e.clientX, e.clientY, true);
+      }
+    };
+
+    this.proxyLayer.addEventListener('pointerup', endDrag);
+    this.proxyLayer.addEventListener('pointercancel', endDrag);
+    this.proxyLayer.addEventListener('pointerleave', () => {
+      if (!this.dragMode) this.clearHover();
+    });
+
+    this.proxyLayer.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const ctx = this.activeCtx;
+      if (!ctx || !ctx.ready || !ctx.cam) return;
+
+      ctx.userInteracting = true;
+      const factor = Math.exp(e.deltaY * pCfg.zoomSensitivity);
+      const minR = ctx.camDist * pCfg.minRadiusFactor;
+      const maxR = ctx.camDist * pCfg.maxRadiusFactor;
+      ctx.cam.radius = Math.max(minR, Math.min(maxR, ctx.cam.radius * factor));
+      if (ctx.focusedPartIdx === null) {
+        ctx.cam.baseRadius = ctx.cam.radius / this.getZoomMultiplier(ctx.explodeVal);
+      }
+      ctx.cam.dirty = true;
+      this.scheduleSpinResume(ctx);
+    }, { passive: false });
+
+    this.proxyLayer.addEventListener('dblclick', () => {
+      this.recenter();
+    });
+  }
+
+  // Authoritative screen-space raycast through Sketchfab API at exact cursor CSS coordinates
+  pickUnderCursor(ctx, clientX, clientY, isClick) {
+    if (!ctx.api || typeof ctx.api.pickFromScreen !== 'function') return;
+    const rect = ctx.iframe.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+
+    if (!isClick) this.hoverPickInFlight = true;
+    ctx.api.pickFromScreen([x, y], (err, info) => {
+      if (!isClick) this.hoverPickInFlight = false;
+      if (this.activeAssetId !== ctx.asset.id) return;
+
+      if (err || !info || info.instanceID == null) {
+        if (!isClick) this.clearHover();
+        return;
+      }
+
+      const partIdx = ctx.nodeToPartIndex[info.instanceID];
+      if (partIdx === undefined) {
+        if (!isClick) this.clearHover();
+        return;
+      }
+
+      if (isClick) {
+        this.selectSinglePartToFocus(partIdx, info.position3D);
+      } else if (!this.dragMode) {
+        this.hoverPart(partIdx, false);
+      }
+    });
+  }
+
+  // Smooth damped spherical camera loop (only dispatches setCameraLookAt when camera is actually moving)
+  startCameraDampingLoop() {
+    const step = (now) => {
+      requestAnimationFrame(step);
+      const pCfg = window.PortfolioConfig.cameraProxy;
+      if (now - this.lastCamSyncTick < pCfg.cameraSyncIntervalMs) return;
+
+      const ctx = this.activeCtx;
+      if (!ctx || !ctx.ready || !ctx.api || !ctx.cam || !ctx.cam.dirty) return;
+      if (Date.now() < ctx.programmaticCamUntil) return;
+
+      this.lastCamSyncTick = now;
+      const d = pCfg.damping;
+      const c = ctx.cam;
+
+      c.curTheta += (c.theta - c.curTheta) * d;
+      c.curPhi += (c.phi - c.curPhi) * d;
+      c.curRadius += (c.radius - c.curRadius) * d;
+      c.curTarget[0] += (c.target[0] - c.curTarget[0]) * d;
+      c.curTarget[1] += (c.target[1] - c.curTarget[1]) * d;
+      c.curTarget[2] += (c.target[2] - c.curTarget[2]) * d;
+
+      const errSum =
+        Math.abs(c.theta - c.curTheta) +
+        Math.abs(c.phi - c.curPhi) +
+        Math.abs(c.radius - c.curRadius) / (ctx.camDist || 1) +
+        Math.hypot(c.target[0] - c.curTarget[0], c.target[1] - c.curTarget[1], c.target[2] - c.curTarget[2]) / (ctx.camDist || 1);
+
+      if (errSum < 0.0005 && !this.dragMode) {
+        c.curTheta = c.theta;
+        c.curPhi = c.phi;
+        c.curRadius = c.radius;
+        c.curTarget = c.target.slice();
+        c.dirty = false;
+      }
+
+      const eye = this.sphericalToEye({
+        theta: c.curTheta, phi: c.curPhi, radius: c.curRadius, target: c.curTarget
+      });
+      ctx.api.setCameraLookAt(eye, c.curTarget, 0.001);
+    };
+    requestAnimationFrame(step);
   }
 
   async fetchRestMeta(uid) {
@@ -336,25 +571,6 @@ class SketchfabPoolEngine {
     return 1 + factor * (this.mode === 'linear' ? expCfg.cameraZoomLinear : expCfg.cameraZoomRadial);
   }
 
-  syncCameraBaseline(ctx) {
-    if (!ctx || !ctx.ready || !ctx.api) return;
-    if (ctx.focusedPartIdx !== null) return;
-    if (Date.now() < ctx.programmaticCamUntil) return;
-
-    ctx.api.getCameraLookAt((err, cam) => {
-      if (err || !cam) return;
-      const zoomMult = this.getZoomMultiplier(ctx.explodeVal);
-      ctx.baselineCam = {
-        target: [cam.target[0], cam.target[1], cam.target[2]],
-        baseVec: [
-          (cam.position[0] - cam.target[0]) / zoomMult,
-          (cam.position[1] - cam.target[1]) / zoomMult,
-          (cam.position[2] - cam.target[2]) / zoomMult
-        ]
-      };
-    });
-  }
-
   configureHighlightStyle(api) {
     if (typeof api.setHighlightOptions !== 'function') return;
     const interCfg = window.PortfolioConfig.interaction;
@@ -367,21 +583,13 @@ class SketchfabPoolEngine {
     });
   }
 
-  /**
-   * Hover part handler:
-   * Suppresses part-name callout & outline when a single part is already isolated/focused.
-   */
-  hoverPart(idx, screenCoords = null, fromList = false) {
+  hoverPart(idx, fromList = false) {
     const ctx = this.activeCtx;
     if (!ctx || !ctx.ready || !ctx.api) return;
 
     const onlyWhenUnfocused = window.PortfolioConfig.cursor.showPartLabelOnlyWhenUnfocused;
     if (onlyWhenUnfocused && ctx.focusedPartIdx !== null) {
-      if (ctx.hoveredPartIdx !== null) {
-        ctx.hoveredPartIdx = null;
-        if (typeof ctx.api.highlightNode === 'function') ctx.api.highlightNode();
-      }
-      EventBus.emit('engine:hover-updated', { idx: null, part: null, screenCoords: null, fromList });
+      this.clearHover(fromList);
       return;
     }
 
@@ -397,7 +605,6 @@ class SketchfabPoolEngine {
     EventBus.emit('engine:hover-updated', {
       idx,
       part: idx !== null ? ctx.parts[idx] : null,
-      screenCoords,
       fromList
     });
   }
@@ -408,56 +615,13 @@ class SketchfabPoolEngine {
       ctx.hoveredPartIdx = null;
       if (ctx.api && typeof ctx.api.highlightNode === 'function') ctx.api.highlightNode();
     }
-    EventBus.emit('engine:hover-updated', { idx: null, part: null, screenCoords: null, fromList });
-  }
-
-  // Project 3D hit point (or 2D canvas point) into exact parent viewport CSS coordinates
-  resolveAndEmitPartHover(ctx, partIdx, info) {
-    const part = ctx.parts[partIdx];
-    if (!part) return;
-
-    const rect = ctx.iframe.getBoundingClientRect();
-    let initialCoords = null;
-
-    if (info && Array.isArray(info.position2D) && info.position2D.length >= 2) {
-      let [x, y] = info.position2D;
-      if (x > rect.width * 1.05 || y > rect.height * 1.05) {
-        const dpr = window.devicePixelRatio || 1;
-        x /= dpr;
-        y /= dpr;
-      }
-      initialCoords = [rect.left + x, rect.top + y];
-    }
-
-    // Emit immediately if 2D coordinates are ready
-    if (initialCoords) {
-      this.hoverPart(partIdx, initialCoords, false);
-    }
-
-    // Project exact 3D hit point via Sketchfab's authoritative top-left CSS coordinate converter
-    const worldPt = (info && Array.isArray(info.position3D) && info.position3D) || part.worldPos;
-    if (worldPt && typeof ctx.api.getWorldToScreenCoordinates === 'function') {
-      ctx.api.getWorldToScreenCoordinates(worldPt, (coord) => {
-        if (this.activeAssetId !== ctx.asset.id) return;
-        if (ctx.focusedPartIdx !== null) return;
-        if (coord && Array.isArray(coord.canvasCoord)) {
-          const exactCoords = [
-            rect.left + coord.canvasCoord[0],
-            rect.top + coord.canvasCoord[1]
-          ];
-          this.hoverPart(partIdx, exactCoords, false);
-        } else if (!initialCoords) {
-          this.hoverPart(partIdx, [rect.left + rect.width * 0.5, rect.top + rect.height * 0.5], false);
-        }
-      });
-    } else if (!initialCoords) {
-      this.hoverPart(partIdx, [rect.left + rect.width * 0.5, rect.top + rect.height * 0.5], false);
-    }
+    EventBus.emit('engine:hover-updated', { idx: null, part: null, fromList });
   }
 
   ensureInstance(asset) {
     if (this.instances.has(asset.id)) return this.instances.get(asset.id);
 
+    // pointer-events: none is permanent so Sketchfab never steals cursor or mouse coordinates
     const iframe = document.createElement('iframe');
     iframe.id = `sf-frame-${asset.id}`;
     iframe.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;border:0;opacity:0;pointer-events:none;z-index:1;transition:opacity 0.25s ease;';
@@ -472,10 +636,10 @@ class SketchfabPoolEngine {
       parts: [], spinRoots: [], nodeToPartIndex: {}, allGeometryIDs: [],
       baseMaterials: [], materialsDirty: false,
       collisionBadge: '', polys: 0, verts: 0,
-      camDist: 4.0, spinCenter: [0, 0, 0], defaultCam: null, baselineCam: null,
+      camDist: 4.0, spinCenter: [0, 0, 0], defaultCam: null, cam: null,
       explodeVal: 0, shaderMode: 'rendered', lightDeg: 0, spinAngle: 0,
       focusedPartIdx: null, hoveredPartIdx: null, savedPreFocusCam: null,
-      userInteracting: false, interactTimer: null, watchdogTimer: null,
+      userInteracting: false, interactTimer: null,
       programmaticCamUntil: 0, explodingUntil: 0
     };
     this.instances.set(asset.id, ctx);
@@ -491,51 +655,6 @@ class SketchfabPoolEngine {
         api.start();
         api.addEventListener('viewerready', () => {
           this.configureHighlightStyle(api);
-          const turnCfg = window.PortfolioConfig.turntable;
-          const pickOpts = { pick: window.PortfolioConfig.interaction.pickMode || 'slow' };
-
-          // Pause spin immediately when camera starts moving + set watchdog so wheel-zoom never stalls spin
-          api.addEventListener('camerastart', () => {
-            if (Date.now() < ctx.programmaticCamUntil) return;
-            ctx.userInteracting = true;
-            if (ctx.interactTimer) clearTimeout(ctx.interactTimer);
-            if (ctx.watchdogTimer) clearTimeout(ctx.watchdogTimer);
-            ctx.watchdogTimer = setTimeout(() => {
-              ctx.userInteracting = false;
-            }, turnCfg.interactionWatchdogMs);
-          });
-
-          // Unconditionally resume spin after camera movement settles
-          api.addEventListener('cameraend', () => {
-            if (Date.now() >= ctx.programmaticCamUntil) {
-              this.syncCameraBaseline(ctx);
-            }
-            this.scheduleSpinResume(ctx, turnCfg.resumeAfterCameraIdleMs);
-          });
-
-          // 3D part hover -> outline + linked reticle callout (only when not isolated)
-          api.addEventListener('nodeMouseEnter', (info) => {
-            if (this.activeAssetId !== asset.id || !info || info.instanceID == null) return;
-            if (ctx.parts.length <= 1 || ctx.focusedPartIdx !== null) return;
-            const partIdx = ctx.nodeToPartIndex[info.instanceID];
-            if (partIdx !== undefined) {
-              this.resolveAndEmitPartHover(ctx, partIdx, info);
-            }
-          }, pickOpts);
-
-          api.addEventListener('nodeMouseLeave', () => {
-            if (this.activeAssetId !== asset.id) return;
-            this.clearHover(false);
-          }, pickOpts);
-
-          // 3D part click -> isolate & center zoom
-          api.addEventListener('click', (info) => {
-            if (!info || info.instanceID == null || ctx.parts.length <= 1) return;
-            const partIdx = ctx.nodeToPartIndex[info.instanceID];
-            if (partIdx !== undefined) {
-              this.selectSinglePartToFocus(partIdx, info.position3D);
-            }
-          }, pickOpts);
 
           const camPromise = new Promise(resolve => api.getCameraLookAt((err, cam) => resolve(!err ? cam : null)));
           const matPromise = new Promise(resolve => api.getMaterialList((err, mats) => resolve(!err && mats ? mats : [])));
@@ -549,7 +668,7 @@ class SketchfabPoolEngine {
               ctx.camDist = Math.max(0.1, Math.hypot(vx, vy, vz));
               ctx.spinCenter = [cam.target[0], cam.target[1], cam.target[2]];
               ctx.defaultCam = { position: cam.position.slice(), target: cam.target.slice() };
-              ctx.baselineCam = { target: cam.target.slice(), baseVec: [vx, vy, vz] };
+              this.initSphericalState(ctx, cam.position, cam.target);
             }
 
             ctx.baseMaterials = JSON.parse(JSON.stringify(mats));
@@ -586,7 +705,6 @@ class SketchfabPoolEngine {
 
     ctx.userInteracting = false;
     if (ctx.interactTimer) clearTimeout(ctx.interactTimer);
-    if (ctx.watchdogTimer) clearTimeout(ctx.watchdogTimer);
 
     if (ctx.hoveredPartIdx !== null) {
       ctx.hoveredPartIdx = null;
@@ -624,13 +742,10 @@ class SketchfabPoolEngine {
       ctx.api.setEnvironment({ enable: true, rotation: 0 });
     }
 
-    ctx.programmaticCamUntil = Date.now() + 800;
+    ctx.programmaticCamUntil = Date.now() + 550;
     if (ctx.defaultCam) {
-      const p = ctx.defaultCam.position, t = ctx.defaultCam.target;
-      ctx.api.setCameraLookAt(p, t, 0.35);
-      ctx.baselineCam = { target: t.slice(), baseVec: [p[0] - t[0], p[1] - t[1], p[2] - t[2]] };
-    } else {
-      ctx.api.recenterCamera();
+      ctx.api.setCameraLookAt(ctx.defaultCam.position, ctx.defaultCam.target, 0.35);
+      this.initSphericalState(ctx, ctx.defaultCam.position, ctx.defaultCam.target);
     }
   }
 
@@ -647,7 +762,6 @@ class SketchfabPoolEngine {
     this.instances.forEach((ctx, id) => {
       const active = id === asset.id;
       ctx.iframe.style.opacity = active ? '1' : '0';
-      ctx.iframe.style.pointerEvents = active ? 'auto' : 'none';
       ctx.iframe.style.zIndex = active ? '10' : '1';
     });
 
@@ -691,32 +805,10 @@ class SketchfabPoolEngine {
     return this.autoSpinEnabled;
   }
 
-  captureBaseline(currentSliderVal) {
-    const ctx = this.activeCtx;
-    if (!ctx || !ctx.ready || !ctx.api || ctx.focusedPartIdx !== null) return Promise.resolve();
-    const zoomMult = this.getZoomMultiplier(currentSliderVal);
-    return new Promise((resolve) => {
-      ctx.api.getCameraLookAt((err, cam) => {
-        if (!err && cam) {
-          ctx.baselineCam = {
-            target: [cam.target[0], cam.target[1], cam.target[2]],
-            baseVec: [
-              (cam.position[0] - cam.target[0]) / zoomMult,
-              (cam.position[1] - cam.target[1]) / zoomMult,
-              (cam.position[2] - cam.target[2]) / zoomMult
-            ]
-          };
-        }
-        resolve();
-      });
-    });
-  }
-
   explode(percent, adjustCam = true, durationSec = 0.65) {
     const ctx = this.activeCtx;
     if (!ctx || !ctx.ready || !ctx.api || ctx.parts.length <= 1) return;
 
-    const interCfg = window.PortfolioConfig.interaction;
     ctx.explodeVal = parseFloat(percent) || 0;
     const now = Date.now();
     ctx.explodingUntil = now + durationSec * 1000 + 180;
@@ -740,35 +832,19 @@ class SketchfabPoolEngine {
       ctx.api.translate(p.instanceID, positions[idx], opts);
     });
 
-    if (adjustCam && ctx.baselineCam && durationSec > 0 && ctx.focusedPartIdx === null) {
+    if (adjustCam && ctx.cam && durationSec > 0 && ctx.focusedPartIdx === null) {
       const z = this.getZoomMultiplier(ctx.explodeVal);
-      const t = ctx.baselineCam.target;
-      const v = ctx.baselineCam.baseVec;
-      ctx.programmaticCamUntil = now + durationSec * 1000 + interCfg.cameraLockBufferMs;
-      ctx.api.setCameraLookAt(
-        [t[0] + v[0] * z, t[1] + v[1] * z, t[2] + v[2] * z],
-        t,
-        durationSec
-      );
+      ctx.cam.radius = ctx.cam.baseRadius * z;
+      ctx.cam.curRadius = ctx.cam.radius;
+      const eye = this.sphericalToEye({
+        theta: ctx.cam.theta, phi: ctx.cam.phi, radius: ctx.cam.radius, target: ctx.cam.target
+      });
+      ctx.programmaticCamUntil = now + durationSec * 1000 + 250;
+      ctx.api.setCameraLookAt(eye, ctx.cam.target, durationSec);
     }
   }
 
-  savePreFocusCameraIfNeeded(ctx) {
-    if (ctx.savedPreFocusCam) return Promise.resolve();
-    return new Promise((resolve) => {
-      ctx.api.getCameraLookAt((err, cam) => {
-        if (!err && cam) {
-          ctx.savedPreFocusCam = {
-            position: cam.position.slice(),
-            target: cam.target.slice()
-          };
-        }
-        resolve();
-      });
-    });
-  }
-
-  async selectSinglePartToFocus(idx, hitPos3D = null) {
+  selectSinglePartToFocus(idx, hitPos3D = null) {
     const ctx = this.activeCtx;
     if (!ctx || !ctx.ready || !ctx.api || !ctx.parts[idx]) return;
 
@@ -778,10 +854,20 @@ class SketchfabPoolEngine {
     }
 
     const interCfg = window.PortfolioConfig.interaction;
-    await this.savePreFocusCameraIfNeeded(ctx);
+    if (!ctx.savedPreFocusCam && ctx.cam) {
+      ctx.savedPreFocusCam = {
+        theta: ctx.cam.theta,
+        phi: ctx.cam.phi,
+        radius: ctx.cam.radius,
+        baseRadius: ctx.cam.baseRadius,
+        target: ctx.cam.target.slice()
+      };
+    }
+
     ctx.focusedPartIdx = idx;
     this.clearHover(false);
 
+    // Pure geometry set difference: show only selected part, hide all other geometries
     const targetPart = ctx.parts[idx];
     const keepSet = new Set(targetPart.geoIDs || []);
     ctx.allGeometryIDs.forEach(gid => {
@@ -791,24 +877,24 @@ class SketchfabPoolEngine {
 
     EventBus.emit('engine:isolation-updated', ctx);
 
-    ctx.programmaticCamUntil = Date.now() + 1400;
+    ctx.programmaticCamUntil = Date.now() + interCfg.focusSettleSyncMs + 300;
     setTimeout(() => {
       if (!ctx.api || ctx.focusedPartIdx !== idx) return;
       if (typeof ctx.api.focusOnVisibleGeometries === 'function') {
         ctx.api.focusOnVisibleGeometries();
       } else {
         const center = hitPos3D || targetPart.worldPos || ctx.spinCenter;
-        const base = ctx.savedPreFocusCam || ctx.defaultCam;
-        if (base) {
-          const r = interCfg.fallbackFocusDistanceRatio;
-          const dir = [base.position[0] - base.target[0], base.position[1] - base.target[1], base.position[2] - base.target[2]];
-          ctx.api.setCameraLookAt(
-            [center[0] + dir[0] * r, center[1] + dir[1] * r, center[2] + dir[2] * r],
-            center,
-            interCfg.focusTransitionSec
-          );
-        }
+        const r = ctx.camDist * interCfg.fallbackFocusDistanceRatio;
+        const eye = this.sphericalToEye({
+          theta: ctx.cam.theta, phi: ctx.cam.phi, radius: r, target: center
+        });
+        ctx.api.setCameraLookAt(eye, center, interCfg.focusTransitionSec);
       }
+
+      // Sync our custom spherical controller to the focused camera so user can orbit smoothly around it
+      setTimeout(() => {
+        if (ctx.focusedPartIdx === idx) this.syncSphericalFromAPI(ctx);
+      }, interCfg.focusSettleSyncMs);
     }, interCfg.focusBoxUpdateDelayMs);
   }
 
@@ -822,10 +908,17 @@ class SketchfabPoolEngine {
     ctx.allGeometryIDs.forEach(gid => ctx.api.show(gid));
 
     if (ctx.savedPreFocusCam) {
-      const saved = ctx.savedPreFocusCam;
+      const s = ctx.savedPreFocusCam;
       ctx.savedPreFocusCam = null;
-      ctx.programmaticCamUntil = Date.now() + 1100;
-      ctx.api.setCameraLookAt(saved.position, saved.target, interCfg.focusTransitionSec);
+      ctx.cam = {
+        theta: s.theta, phi: s.phi, radius: s.radius, target: s.target.slice(),
+        curTheta: s.theta, curPhi: s.phi, curRadius: s.radius, curTarget: s.target.slice(),
+        baseRadius: s.baseRadius,
+        dirty: false
+      };
+      const eye = this.sphericalToEye(ctx.cam);
+      ctx.programmaticCamUntil = Date.now() + interCfg.focusTransitionSec * 1000 + 250;
+      ctx.api.setCameraLookAt(eye, ctx.cam.target, interCfg.focusTransitionSec);
     }
 
     EventBus.emit('engine:isolation-updated', ctx);
@@ -839,13 +932,13 @@ class SketchfabPoolEngine {
       return;
     }
     const settleMs = window.PortfolioConfig.interaction.recenterSettleMs;
-    ctx.programmaticCamUntil = Date.now() + settleMs + 300;
-    ctx.api.recenterCamera(() => {
-      setTimeout(() => {
-        ctx.programmaticCamUntil = 0;
-        this.syncCameraBaseline(ctx);
-      }, settleMs);
-    });
+    ctx.programmaticCamUntil = Date.now() + settleMs + 250;
+    if (ctx.defaultCam) {
+      ctx.api.setCameraLookAt(ctx.defaultCam.position, ctx.defaultCam.target, 0.50);
+      this.initSphericalState(ctx, ctx.defaultCam.position, ctx.defaultCam.target);
+    } else {
+      ctx.api.recenterCamera(() => setTimeout(() => this.syncSphericalFromAPI(ctx), settleMs));
+    }
   }
 
   setShading(mode) {
@@ -1092,7 +1185,7 @@ const StudioUI = {
     AnimeGridStage.setExplodeProgress(0);
     AnimeGridStage.setAccent(window.PortfolioConfig.theme.accentRGB);
     this.updateFocusExitBar(null);
-    CustomCursorHUD.unlockPart(true);
+    CustomCursorHUD.unlockPart();
   },
 
   selectAsset(id) {
@@ -1135,10 +1228,9 @@ const StudioUI = {
     }
   },
 
-  async runExplodeTo(target) {
+  runExplodeTo(target) {
     const expCfg = window.PortfolioConfig.explosion;
     const slider = document.getElementById('explode-slider');
-    await this.engine.captureBaseline(slider.value);
     slider.value = target;
     document.getElementById('explode-percent').textContent = Math.round(target) + '%';
     this.engine.explode(target, true, expCfg.buttonDurationSec);
@@ -1155,17 +1247,14 @@ const StudioUI = {
     });
 
     EventBus.on('engine:isolation-updated', (ctx) => {
-      CustomCursorHUD.unlockPart(false);
+      CustomCursorHUD.unlockPart();
       this.renderSubpartList(ctx);
     });
 
-    EventBus.on('engine:hover-updated', ({ idx, part, screenCoords, fromList }) => {
+    EventBus.on('engine:hover-updated', ({ idx, part, fromList }) => {
       if (!fromList) this.syncSidebarHoverState(idx);
-      if (part && idx !== null) {
-        CustomCursorHUD.lockOnPart(part, idx, screenCoords);
-      } else {
-        CustomCursorHUD.unlockPart(fromList);
-      }
+      if (part && idx !== null) CustomCursorHUD.lockOnPart(part, idx);
+      else CustomCursorHUD.unlockPart();
     });
 
     EventBus.on('engine:ready', (ctx) => {
@@ -1195,20 +1284,19 @@ const StudioUI = {
       }
     });
 
-    // Sidebar list hover -> outline 3D part + show linked cursor callout (only when not focused)
     const subpartList = document.getElementById('subpart-list');
     if (subpartList) {
       subpartList.addEventListener('mousemove', (e) => {
         const row = e.target.closest('[data-action="isolate-part"]');
         if (!row) return;
-        this.engine.hoverPart(parseInt(row.dataset.idx, 10), [e.clientX, e.clientY], true);
+        this.engine.hoverPart(parseInt(row.dataset.idx, 10), true);
       });
       subpartList.addEventListener('mouseleave', () => {
         this.engine.clearHover(true);
       });
     }
 
-    document.body.addEventListener('click', async (e) => {
+    document.body.addEventListener('click', (e) => {
       const btn = e.target.closest('[data-action]');
       if (!btn) return;
       const act = btn.dataset.action;
@@ -1257,7 +1345,6 @@ const StudioUI = {
     const expSlider = document.getElementById('explode-slider');
     let rafPending = false;
 
-    expSlider.addEventListener('pointerdown', () => this.engine.captureBaseline(expSlider.value));
     expSlider.addEventListener('input', (e) => {
       const val = parseFloat(e.target.value) || 0;
       document.getElementById('explode-percent').textContent = Math.round(val) + '%';
