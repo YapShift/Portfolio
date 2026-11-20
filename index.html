@@ -21,9 +21,10 @@
       --accent: #e05a2b;
       --text-primary: #f4f4f5;
 
-      /* Exclusive custom SVG hardware cursors (zero latency precision crosshair & active copper diamond) */
-      --cursor-default: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='%23f4f4f5' stroke-width='1.4'%3E%3Cpath d='M12 4v5M12 15v5M4 12h5M15 12h5' stroke-opacity='0.85'/%3E%3C/g%3E%3Ccircle cx='12' cy='12' r='1.6' fill='%23e05a2b'/%3E%3C/svg%3E") 12 12, crosshair;
+      /* Exclusive custom SVG hardware cursors active across 100% of the viewport */
+      --cursor-default: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cg fill='none' stroke='%23f4f4f5' stroke-width='1.4'%3E%3Cpath d='M12 4v5M12 15v5M4 12h5M15 12h5' stroke-opacity='0.88'/%3E%3C/g%3E%3Ccircle cx='12' cy='12' r='1.6' fill='%23e05a2b'/%3E%3C/svg%3E") 12 12, crosshair;
       --cursor-pointer: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M12 5l7 7-7 7-7-7z' fill='rgba(224,90,43,0.18)' stroke='%23e05a2b' stroke-width='1.5'/%3E%3Ccircle cx='12' cy='12' r='1.8' fill='%23ffffff'/%3E%3C/svg%3E") 12 12, pointer;
+      --cursor-grabbing: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Ccircle cx='12' cy='12' r='6' fill='rgba(224,90,43,0.15)' stroke='%23e05a2b' stroke-width='1.5' stroke-dasharray='3 2'/%3E%3Ccircle cx='12' cy='12' r='2' fill='%23ffffff'/%3E%3C/svg%3E") 12 12, grabbing;
     }
 
     * { box-sizing: border-box; }
@@ -43,6 +44,14 @@
 
     button, a, input[type="range"], [data-action] {
       cursor: var(--cursor-pointer) !important;
+    }
+
+    #viewport-proxy-layer {
+      cursor: var(--cursor-default);
+      touch-action: none;
+    }
+    #viewport-proxy-layer.is-orbiting {
+      cursor: var(--cursor-grabbing);
     }
 
     .font-display { font-family: 'Space Grotesk', sans-serif; }
@@ -125,7 +134,7 @@
     }
 
     /* =========================================================
-       Exclusive Tactical Cursor Follower & Linked CAD Part Callout
+       Exclusive Tactical Cursor Follower & Linked CAD Callout
        ========================================================= */
     #yapshift-cursor-hud {
       position: fixed;
@@ -134,7 +143,7 @@
       z-index: 9999;
       pointer-events: none;
       will-change: transform, opacity;
-      transition: opacity 0.18s ease;
+      transition: opacity 0.16s ease;
     }
 
     .cursor-reticle {
@@ -153,10 +162,9 @@
                   border-radius 0.2s ease,
                   border-color 0.2s ease,
                   background-color 0.2s ease,
-                  transform 0.25s ease;
+                  transform 0.22s ease;
     }
 
-    /* State: Hovering UI buttons / controls */
     #yapshift-cursor-hud.is-interactive .cursor-reticle {
       width: 32px;
       height: 32px;
@@ -166,7 +174,15 @@
       background-color: rgba(224, 90, 43, 0.06);
     }
 
-    /* State: Target-Lock on a 3D Part (morphs circle into precision CAD target bracket) */
+    #yapshift-cursor-hud.is-dragging .cursor-reticle {
+      width: 36px;
+      height: 36px;
+      margin-left: -18px;
+      margin-top: -18px;
+      border-color: rgba(224, 90, 43, 0.85);
+      border-style: dashed;
+    }
+
     #yapshift-cursor-hud.is-part-lock .cursor-reticle {
       width: 28px;
       height: 28px;
@@ -179,7 +195,6 @@
       transform: rotate(45deg);
     }
 
-    /* Linked CAD Callout Wing (extends directly out of the cursor reticle) */
     .cursor-callout {
       position: absolute;
       top: 0;
@@ -188,7 +203,7 @@
       display: flex;
       align-items: center;
       opacity: 0;
-      transition: opacity 0.16s ease, transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+      transition: opacity 0.15s ease, transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
     }
 
     #yapshift-cursor-hud.is-part-lock .cursor-callout {
@@ -196,7 +211,6 @@
       transform: translateY(-50%) translateX(0);
     }
 
-    /* Auto-flip callout to the LEFT side when near right screen edge */
     #yapshift-cursor-hud.flip-left .cursor-callout {
       left: auto;
       right: 16px;
@@ -235,8 +249,11 @@
   <!-- Precision interactive dot/crosshair matrix & breathing reticle canvas -->
   <canvas id="anime-bg-canvas" class="fixed inset-0 w-full h-full pointer-events-none z-0"></canvas>
 
-  <!-- Fullscreen multi-iframe parallel WebGL cache pool -->
-  <div id="sketchfab-viewport-pool" class="fixed inset-0 w-full h-full z-10"></div>
+  <!-- Fullscreen multi-iframe parallel WebGL cache pool (pointer-events permanently disabled) -->
+  <div id="sketchfab-viewport-pool" class="fixed inset-0 w-full h-full pointer-events-none z-10"></div>
+
+  <!-- Transparent Proxy Interaction Layer: owns 100% of 3D orbit/pan/zoom, raycast hover & custom cursor -->
+  <div id="viewport-proxy-layer" class="fixed inset-0 w-full h-full z-[15]"></div>
 
   <!-- Exclusive Tactical Cursor & Linked CAD Part-Name Callout -->
   <div id="yapshift-cursor-hud" class="opacity-0" style="transform: translate3d(-9999px, -9999px, 0);">
@@ -260,7 +277,7 @@
   </div>
 
   <!-- =========================================================
-       STAGE 01: Showreel Intro Overlay (Parallel Asset Preloader)
+       STAGE 01: Showreel Intro Overlay
        ========================================================= -->
   <div id="hero-overlay" class="fixed inset-0 z-50 flex flex-col justify-between p-8 md:p-12 bg-[#09090b]/82 transition-all duration-500">
     <div class="flex items-center justify-between border-b border-white/[0.08] pb-5">
@@ -306,7 +323,7 @@
   <!-- =========================================================
        STAGE 02: Fullscreen 3D Workbench HUD
        ========================================================= -->
-  <div id="loading-overlay" class="fixed inset-0 z-15 bg-[#09090b]/80 flex flex-col items-center justify-center gap-3 transition-opacity duration-300 opacity-0 pointer-events-none">
+  <div id="loading-overlay" class="fixed inset-0 z-[18] bg-[#09090b]/80 flex flex-col items-center justify-center gap-3 transition-opacity duration-300 opacity-0 pointer-events-none">
     <div class="w-7 h-7 border-[1.5px] border-[#e05a2b] border-t-transparent rounded-full animate-spin"></div>
     <div class="text-[11px] font-mono tracking-[0.2em] text-zinc-400">LOADING MODEL</div>
   </div>
