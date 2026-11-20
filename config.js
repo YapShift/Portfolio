@@ -1,21 +1,21 @@
 /**
  * YapShift 3D Portfolio Studio — Centralized Configuration (config.js)
- * All tunable visual, cursor, camera proxy, turntable, explosion, and asset parameters live here.
+ * Native Three.js + GLB Engine Edition.
  */
 window.PortfolioConfig = {
   brand: {
     name: 'YAPSHIFT',
     archiveTag: '/ 3D ARCHIVE 2026',
     githubUrl: 'https://yapshift.github.io/Portfolio/',
-    heroBadges: ['Hard-Surface Engineering', '5-Level LOD', 'WebGL Studio'],
+    heroBadges: ['Hard-Surface Engineering', '5-Level LOD', 'Native WebGL'],
     heroHeadline: 'Precision 3D Assets',
     heroDescription:
-      'Featuring two original production assets: a multi-part Mechanical Suspension Assembly and a 5-Level Stylized Rock LOD pipeline. Built with real-time collision-free explosion, custom reticle part callouts, and single-part focus.',
+      'Featuring two original production assets: a multi-part Mechanical Suspension Assembly and a 5-Level Stylized Rock LOD pipeline. Powered by a custom native Three.js engine with real Box3 collision-free explosion and 60FPS part inspection.',
     heroFeatures: [
       {
         tag: '01 / ASSEMBLY',
         title: 'Mechanical Suspension',
-        desc: 'Precision multi-part hard-surface assembly with radial & axial exploded views and AABB collision avoidance.'
+        desc: 'Precision multi-part hard-surface assembly with real Box3 AABB collision-resolved radial & linear exploded views.'
       },
       {
         tag: '02 / OPTIMIZATION',
@@ -23,19 +23,30 @@ window.PortfolioConfig = {
         desc: 'Side-by-side comparison from LOD0 to LOD4, preserving high-poly normal fidelity and silhouette at minimal polycount.'
       },
       {
-        tag: '03 / INTERACTION',
-        title: 'Proxy Reticle & Focus',
-        desc: 'Full viewport cursor ownership with live raycast CAD part labels, parallel preloading, and click-to-focus isolation.'
+        tag: '03 / ENGINE',
+        title: 'Native Three.js Workbench',
+        desc: 'Zero-latency custom reticle & CAD part callouts, Draco-compressed GLB preloading, and click-to-focus isolation.'
       }
     ],
     footerLeft: 'DESIGNED & MODELED BY YAPSHIFT',
     footerRight: 'SUSPENSION ASSEMBLY · STYLIZED ROCK 5-LOD'
   },
 
+  renderer: {
+    maxPixelRatio: 2,
+    exposure: 1.15,
+    envIntensity: 1.0,
+    dracoDecoderPath: 'https://www.gstatic.com/draco/versioned/decoders/1.5.7/',
+    screenshotBgHex: '#09090b',
+    screenshotWidth: 1920,
+    screenshotHeight: 1080
+  },
+
   theme: {
     accentHex: '#e05a2b',
     accentRGB: '224, 90, 43',
-    wireframeHex: 'E05A2BFF',
+    wireframeColor: 0xe05a2b,
+    clayColor: 0xd4d4d8,
     xrayOpacity: 0.28,
     shaders: [
       { id: 'rendered', label: 'PBR',       rgb: '224, 90, 43' },
@@ -53,18 +64,16 @@ window.PortfolioConfig = {
     showPartLabelOnlyWhenUnfocused: true
   },
 
-  cameraProxy: {
-    orbitSensitivity: 0.0065,
-    panSensitivity: 0.0014,
-    zoomSensitivity: 0.0011,
-    damping: 0.26,
-    minPitchRad: -1.42,
-    maxPitchRad: 1.42,
-    minRadiusFactor: 0.22,
-    maxRadiusFactor: 3.5,
+  camera: {
+    fov: 38,
+    near: 0.01,
+    far: 500,
+    initialFramingMargin: 1.48,
+    dampingFactor: 0.08,
+    minDistanceFactor: 0.22,
+    maxDistanceFactor: 4.0,
     dragClickThresholdPx: 5,
-    hoverPickThrottleMs: 65,
-    cameraSyncIntervalMs: 22
+    transitionDurationMs: 650
   },
 
   background: {
@@ -80,45 +89,37 @@ window.PortfolioConfig = {
     reticleRadiusRatio: 0.30,
     reticleExplodeExpand: 0.06,
     frameIntervalMs: 33,
-    maxDevicePixelRatio: 1.5,
-    webglYieldPauseMs: 220
+    maxDevicePixelRatio: 1.5
   },
 
   turntable: {
     enabledByDefault: true,
-    stepRadians: 0.008,
-    frameIntervalMs: 32,
+    radiansPerSecond: 0.28,
     resumeAfterCameraIdleMs: 650
   },
 
   explosion: {
-    worldRadiusRatio: 0.065,
-    minWorldRadius: 0.02,
-    hitboxHalfSizeRatio: 0.14,
-    hitboxPadding: 1.06,
-    solverIterations: 18,
-    radialHardCapMultiplier: 1.35,
+    // Normalized model fits within a 2.0-unit bounding sphere; distances are in normalized world units
+    baseSpreadRadius: 0.72,
+    hitboxPadding: 1.08,
+    solverIterations: 24,
+    radialHardCapMultiplier: 1.65,
     naturalDirectionBlend: 0.85,
-    linearHalfSpanMultiplier: 1.55,
-    linearOffAxisPull: 0.50,
+    linearGapMultiplier: 0.22,
+    linearOffAxisPull: 0.55,
     presetPercent: 65,
-    buttonDurationSec: 0.65,
-    sliderReleaseDurationSec: 0.45,
-    modeSwitchDurationSec: 0.55,
-    cameraZoomRadial: 0.22,
-    cameraZoomLinear: 0.38
+    buttonDurationMs: 650,
+    sliderReleaseDurationMs: 420,
+    modeSwitchDurationMs: 550,
+    cameraZoomRadial: 0.24,
+    cameraZoomLinear: 0.42
   },
 
   interaction: {
-    outlineWidth: 3.5,
-    outlineColor: [0.95, 0.42, 0.20],
-    focusBoxUpdateDelayMs: 90,
-    focusTransitionSec: 0.65,
-    focusSettleSyncMs: 780,
-    fallbackFocusDistanceRatio: 0.35,
-    recenterSettleMs: 700,
-    screenshotWidth: 1920,
-    screenshotHeight: 1080
+    hoverOutlineColor: 0xe05a2b,
+    hoverOutlineThickness: 0.018,
+    hoverEmissiveIntensity: 0.24,
+    focusFramingMargin: 1.65
   },
 
   assets: [
@@ -127,9 +128,9 @@ window.PortfolioConfig = {
       title: 'Mechanical Suspension Assembly',
       subtitle: 'Multi-Part Hard-Surface Rig',
       category: 'MECHANICAL / HARD-SURFACE',
-      uid: '08632550c5604444a14b53dc339b6589',
+      modelUrl: './models/suspension.glb',
       description:
-        'Precision coilover spring, control arms, hub carrier, and damper assembly. Supports AABB collision-resolved explosion, cursor-linked part callouts, and single-part camera focus.',
+        'Precision coilover spring, control arms, hub carrier, and damper assembly. Supports true Box3 AABB collision-resolved explosion, native 60FPS hover callouts, and single-part camera focus.',
       tags: ['Hard-Surface', 'Multi-Part', 'PBR Metal'],
       workflow: [
         {
@@ -137,7 +138,7 @@ window.PortfolioConfig = {
           title: 'Radial 3D Exploded View',
           tag: '65%',
           action: 'explode-radial',
-          desc: 'Separates components along natural assembly vectors with 3D AABB collision avoidance.'
+          desc: 'Separates components along natural assembly vectors with real 3D Box3 collision avoidance.'
         },
         {
           step: '02',
@@ -160,7 +161,7 @@ window.PortfolioConfig = {
       title: 'Stylized Rock — 5-Level LOD',
       subtitle: 'LOD0 to LOD4 Game Asset',
       category: 'GAME OPTIMIZATION / 5-LOD',
-      uid: 'f9963591aa36459b9837b7a9ca411438',
+      modelUrl: './models/stylized-rock-lod.glb',
       description:
         'Side-by-side comparison of 5 progressive decimation tiers (LOD0–LOD4), retaining crisp normal map bevels and silhouette accuracy down to ultra-low polycounts.',
       tags: ['5-Level LOD', 'Normal Baking', 'Stylized PBR'],
