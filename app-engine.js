@@ -29,10 +29,9 @@ function easeOutBack(t, overshoot = 1.25) {
 }
 
 /**
- * Offscreen Silhouette Mask Outline Renderer:
- * Renders ONLY the hovered mesh as a solid white mask into an offscreen target,
- * then composites an exact `uOutlinePx` outer contour ring (strictly discarding interior pixels).
- * Works identically on Opaque PBR, Clay, Wireframe, and Transparent X-Ray materials!
+ * Offscreen Silhouette Mask Outline Renderer (Fixed for Three.js r170):
+ * - Disables `matrixWorldAutoUpdate` on maskScene & maskMesh so copied worldMatrix is preserved verbatim
+ * - Disables frustum culling & tone mapping on mask pass for pixel-accurate, X-Ray safe contours
  */
 class SilhouetteOutlineRenderer {
   constructor(renderer, cfg) {
@@ -49,13 +48,20 @@ class SilhouetteOutlineRenderer {
       stencilBuffer: false
     });
 
+    // CRITICAL in Three.js r170: disable matrixWorldAutoUpdate so renderer never overwrites copied matrixWorld
     this.maskScene = new THREE.Scene();
+    this.maskScene.matrixWorldAutoUpdate = false;
+
     this.maskMaterial = new THREE.MeshBasicMaterial({
       color: 0xffffff,
-      side: THREE.DoubleSide
+      side: THREE.DoubleSide,
+      toneMapped: false
     });
+
     this.maskMesh = new THREE.Mesh(new THREE.BufferGeometry(), this.maskMaterial);
     this.maskMesh.matrixAutoUpdate = false;
+    this.maskMesh.matrixWorldAutoUpdate = false;
+    this.maskMesh.frustumCulled = false;
     this.maskScene.add(this.maskMesh);
 
     this.compositeScene = new THREE.Scene();
@@ -86,21 +92,18 @@ class SilhouetteOutlineRenderer {
 
         void main() {
           float center = texture2D(tMask, vUv).r;
-          // Discard every pixel inside the mesh so X-Ray transparency stays 100% clean
+          // Strictly discard interior pixels so X-Ray transparency has zero red bleed-through
           if (center > 0.5) discard;
 
           vec2 r = uTexelSize * uOutlinePx;
           float maxN = 0.0;
-          // 8-tap circular dilation for crisp, anti-aliased silhouette halo
-          maxN = max(maxN, texture2D(tMask, vUv + vec2( r.x,  0.0)).r);
-          maxN = max(maxN, texture2D(tMask, vUv + vec2(-r.x,  0.0)).r);
-          maxN = max(maxN, texture2D(tMask, vUv + vec2( 0.0,  r.y)).r);
-          maxN = max(maxN, texture2D(tMask, vUv + vec2( 0.0, -r.y)).r);
-          vec2 d = r * 0.7071;
-          maxN = max(maxN, texture2D(tMask, vUv + vec2( d.x,  d.y)).r);
-          maxN = max(maxN, texture2D(tMask, vUv + vec2(-d.x,  d.y)).r);
-          maxN = max(maxN, texture2D(tMask, vUv + vec2( d.x, -d.y)).r);
-          maxN = max(maxN, texture2D(tMask, vUv + vec2(-d.x, -d.y)).r);
+
+          // 12-tap smooth circular dilation for razor-sharp, anti-aliased outer contour
+          for (int i = 0; i < 12; i++) {
+            float angle = float(i) * 0.52359878; // 30 deg steps
+            vec2 offset = vec2(cos(angle), sin(angle)) * r;
+            maxN = max(maxN, texture2D(tMask, vUv + offset).r);
+          }
 
           float edge = smoothstep(0.15, 0.85, maxN) * (1.0 - center);
           if (edge < 0.02) discard;
@@ -110,7 +113,8 @@ class SilhouetteOutlineRenderer {
       `,
       transparent: true,
       depthTest: false,
-      depthWrite: false
+      depthWrite: false,
+      toneMapped: false
     });
 
     const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.compositeMaterial);
@@ -136,13 +140,13 @@ class SilhouetteOutlineRenderer {
     const prevAutoClear = this.renderer.autoClear;
     const prevClearAlpha = this.renderer.getClearAlpha();
 
-    // 1. Render pure white silhouette mask offscreen
+    // 1. Render pure white binary silhouette mask offscreen
     this.renderer.setRenderTarget(this.maskRT);
     this.renderer.setClearColor(0x000000, 0);
     this.renderer.clear(true, true, false);
     this.renderer.render(this.maskScene, camera);
 
-    // 2. Composite outer silhouette halo onto main transparent canvas
+    // 2. Composite crisp outer silhouette onto main canvas
     this.renderer.setRenderTarget(prevTarget);
     this.renderer.autoClear = false;
     this.renderer.render(this.compositeScene, this.compositeCam);
@@ -151,6 +155,7 @@ class SilhouetteOutlineRenderer {
     this.renderer.setClearAlpha(prevClearAlpha);
   }
 }
+
 
 /**
  * Anime.js UI Motion Choreography Helpers
