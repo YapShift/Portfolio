@@ -1,6 +1,6 @@
 /**
  * YapShift 3D Portfolio Studio — Centralized Configuration (config.js)
- * All tunable visual, cursor, camera, mathematical, and asset parameters live here.
+ * All tunable visual, cursor, camera proxy, turntable, explosion, and asset parameters live here.
  */
 window.PortfolioConfig = {
   brand: {
@@ -10,7 +10,7 @@ window.PortfolioConfig = {
     heroBadges: ['Hard-Surface Engineering', '5-Level LOD', 'WebGL Studio'],
     heroHeadline: 'Precision 3D Assets',
     heroDescription:
-      'Featuring two original production assets: a multi-part Mechanical Suspension Assembly and a 5-Level Stylized Rock LOD pipeline. Built with real-time collision-free explosion, part isolation, and topology inspection.',
+      'Featuring two original production assets: a multi-part Mechanical Suspension Assembly and a 5-Level Stylized Rock LOD pipeline. Built with real-time collision-free explosion, custom reticle part callouts, and single-part focus.',
     heroFeatures: [
       {
         tag: '01 / ASSEMBLY',
@@ -24,8 +24,8 @@ window.PortfolioConfig = {
       },
       {
         tag: '03 / INTERACTION',
-        title: 'Live Part Isolation',
-        desc: 'Parallel background preloading for instant switching, linked reticle part callouts, and click-to-focus inspection.'
+        title: 'Proxy Reticle & Focus',
+        desc: 'Full viewport cursor ownership with live raycast CAD part labels, parallel preloading, and click-to-focus isolation.'
       }
     ],
     footerLeft: 'DESIGNED & MODELED BY YAPSHIFT',
@@ -48,12 +48,23 @@ window.PortfolioConfig = {
 
   cursor: {
     enabled: true,
-    followLerp: 0.32,
-    idleSizePx: 22,
-    interactiveSizePx: 32,
-    partLockSizePx: 28,
+    followLerp: 0.35,
     flipLeftThresholdPx: 280,
     showPartLabelOnlyWhenUnfocused: true
+  },
+
+  cameraProxy: {
+    orbitSensitivity: 0.0065,
+    panSensitivity: 0.0014,
+    zoomSensitivity: 0.0011,
+    damping: 0.26,
+    minPitchRad: -1.42,
+    maxPitchRad: 1.42,
+    minRadiusFactor: 0.22,
+    maxRadiusFactor: 3.5,
+    dragClickThresholdPx: 5,
+    hoverPickThrottleMs: 65,
+    cameraSyncIntervalMs: 22
   },
 
   background: {
@@ -77,10 +88,7 @@ window.PortfolioConfig = {
     enabledByDefault: true,
     stepRadians: 0.008,
     frameIntervalMs: 32,
-    // Resume spin shortly after camera orbit/pan ends
-    resumeAfterCameraIdleMs: 650,
-    // Watchdog timer ensures wheel-zoom (which may omit cameraend) never stalls spin
-    interactionWatchdogMs: 1400
+    resumeAfterCameraIdleMs: 650
   },
 
   explosion: {
@@ -102,14 +110,13 @@ window.PortfolioConfig = {
   },
 
   interaction: {
-    pickMode: 'slow',
     outlineWidth: 3.5,
     outlineColor: [0.95, 0.42, 0.20],
     focusBoxUpdateDelayMs: 90,
     focusTransitionSec: 0.65,
+    focusSettleSyncMs: 780,
     fallbackFocusDistanceRatio: 0.35,
-    cameraLockBufferMs: 400,
-    recenterSettleMs: 600,
+    recenterSettleMs: 700,
     screenshotWidth: 1920,
     screenshotHeight: 1080
   },
@@ -122,7 +129,7 @@ window.PortfolioConfig = {
       category: 'MECHANICAL / HARD-SURFACE',
       uid: '08632550c5604444a14b53dc339b6589',
       description:
-        'Precision coilover spring, control arms, hub carrier, and damper assembly. Supports AABB collision-resolved explosion, hover outline callouts, and single-part camera focus.',
+        'Precision coilover spring, control arms, hub carrier, and damper assembly. Supports AABB collision-resolved explosion, cursor-linked part callouts, and single-part camera focus.',
       tags: ['Hard-Surface', 'Multi-Part', 'PBR Metal'],
       workflow: [
         {
